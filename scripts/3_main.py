@@ -1,5 +1,8 @@
-import time
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import time
 import re
 import pandas as pd
 from datetime import datetime
@@ -7,9 +10,19 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-# Asegúrate de que url_builder.py tenga FILTROS_EXCLUSION definido
-from url_builder import generar_todas_urls, FILTROS_EXCLUSION
-from parsers import parse_zonaprop, parse_argenprop, parse_cabaprop
+import importlib
+parametros = importlib.import_module('0_parametros')
+url_builder = importlib.import_module('1_url_builder')
+parsers = importlib.import_module('2_parsers')
+
+obtener_configuracion = parametros.obtener_configuracion
+TIPOS_DISPONIBLES = parametros.TIPOS_DISPONIBLES
+generar_todas_urls = url_builder.generar_todas_urls
+FILTROS_EXCLUSION = url_builder.FILTROS_EXCLUSION
+configurar = url_builder.configurar
+parse_zonaprop = parsers.parse_zonaprop
+parse_argenprop = parsers.parse_argenprop
+parse_cabaprop = parsers.parse_cabaprop
 
 # ================= CONFIGURACIÓN =================
 HOME_DIR = os.path.expanduser("~")
@@ -75,7 +88,7 @@ def scrape_portal(driver, portal_name, urls_data, parser_func, next_xpath, max_p
         for tipo_inmueble, sitios in tipos_dict.items():
             
             url_inicial = sitios[portal_name]
-            tipo_label = "PH" if tipo_inmueble == 'ph' else "Departamento"
+            tipo_label = TIPOS_DISPONIBLES.get(tipo_inmueble, tipo_inmueble)
             
             print(f"  📍 {barrio.upper()} | {tipo_label.upper()}")
             
@@ -123,7 +136,7 @@ def scrape_portal(driver, portal_name, urls_data, parser_func, next_xpath, max_p
     return portal_data
 
 # ================= GUARDADO =================
-def save_data(data_list, portal_name):
+def save_data(data_list, portal_name, perfil_nombre):
     if not data_list:
         print(f"❌ {portal_name}: Vacío.")
         return
@@ -131,7 +144,6 @@ def save_data(data_list, portal_name):
     df = pd.DataFrame(data_list)
     initial_len = len(df)
     
-    # 1. Filtros
     df['excluded'] = df.apply(is_excluded, axis=1)
     df = df[~df['excluded']].copy()
     
@@ -145,7 +157,6 @@ def save_data(data_list, portal_name):
     if initial_len - clean_len > 0:
         print(f"   🧹 Eliminados: {initial_len - clean_len} registros.")
 
-    # Ordenamiento
     core_columns = [
         'Portal', 'Barrio', 'Tipo', 'Titulo', 'Precio', 'Expensas', 
         'Direccion', 
@@ -163,7 +174,7 @@ def save_data(data_list, portal_name):
     
     df = df[final_order]
     
-    target_folder = os.path.join(BASE_DATA_DIR, portal_name)
+    target_folder = os.path.join(BASE_DATA_DIR, perfil_nombre, portal_name)
     if not os.path.exists(target_folder): os.makedirs(target_folder)
     
     filename = f"{portal_name}_{TODAY_STR}.csv"
@@ -174,21 +185,25 @@ def save_data(data_list, portal_name):
 # ================= RUN =================
 def main():
     try:
+        config = obtener_configuracion()
+        configurar(config)
+        perfil = config.get('nombre', 'default')
+        
         os.system("taskkill /F /IM brave.exe >nul 2>&1")
         urls_dict = generar_todas_urls()
         driver = setup_driver()
         
         # Zonaprop
         data = scrape_portal(driver, "zonaprop", urls_dict, parse_zonaprop, "//a[@data-qa='PAGING_NEXT']")
-        save_data(data, "zonaprop")
+        save_data(data, "zonaprop", perfil)
 
         # Argenprop
         data = scrape_portal(driver, "argenprop", urls_dict, parse_argenprop, "//li[contains(@class, 'pagination__page-next')]/a")
-        save_data(data, "argenprop")
+        save_data(data, "argenprop", perfil)
 
         # Cabaprop
         data = scrape_portal(driver, "cabaprop", urls_dict, parse_cabaprop, "//li[contains(@class, 'next')]/a")
-        save_data(data, "cabaprop")
+        save_data(data, "cabaprop", perfil)
 
         print("\n🎉 LISTO.")
     except Exception as e:
@@ -198,4 +213,4 @@ def main():
         except: pass
 
 if __name__ == "__main__":
-    main()|
+    main()

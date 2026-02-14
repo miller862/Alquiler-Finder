@@ -1,51 +1,12 @@
-import re
+PARAMS = None
+LISTA_BARRIOS = None
+FILTROS_EXCLUSION = []
 
-# ================= 1. CONFIGURACIÓN =================
-
-LISTA_BARRIOS = [
-    "palermo",
-    "villa-urquiza",
-    "parque-chas",     # <--- CAMBIO SOLICITADO
-    "belgrano", 
-    "recoleta", 
-    "almagro",
-    "colegiales",
-    "barrio-norte",
-]
-
-# Palabras prohibidas (Filtro de exclusión que usa el main)
-FILTROS_EXCLUSION = [
-    "monoambiente", 
-    "mono ambiente", 
-    "monoamb",
-    "1 ambiente",
-    "1 amb"
-]
-
-PARAMS = {
-    "operacion": "alquiler",
-    "tipos": ["departamento", "ph"], # Iteramos sobre esto
-    "precio": {
-        "min": 350000,
-        "max": 800000,
-        "moneda": "pesos"
-    },
-    "ambientes": {
-        "min": 2,
-        "max": 3
-    },
-    "dormitorios": {
-        "min": 1,
-        "max": 2
-    },
-    "superficie": {
-        "cubierta_min": 35
-    },
-    "extras": {
-        "balcon": True,          
-        "expensas_max": 300000   
-    }
-}
+def configurar(config):
+    global PARAMS, LISTA_BARRIOS, FILTROS_EXCLUSION
+    PARAMS = config
+    LISTA_BARRIOS = config.get('barrios', [])
+    FILTROS_EXCLUSION = config.get('filtros_exclusion', [])
 
 # Slugs específicos para cada portal
 TYPE_SLUGS = {
@@ -54,7 +15,7 @@ TYPE_SLUGS = {
         "ph": "ph"
     },
     "argenprop": {
-        "departamento": "departamentos", # <--- CORRECCIÓN: Ahora es PLURAL
+        "departamento": "departamentos", #plural
         "ph": "ph"
     },
     "cabaprop": {

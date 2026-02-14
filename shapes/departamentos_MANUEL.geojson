@@ -1,6 +1,6 @@
 {
 "type": "FeatureCollection",
-"name": "departamentos_geocoded",
+"name": "departamentos_MANUEL",
 "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
 "features": [
 { "type": "Feature", "properties": { "Portal": "zonaprop", "Barrio": "belgrano", "Tipo": "Departamento", "Titulo": "Cespedes 2300. Entre Cabildo y Vuelta de Obligado. Cómodo 2 ambientes luminoso En piso alto. Incluye: -Living Comedor -Baño Completo-Dormitorio con amplios placares-Salida a balcón con vista abiertasemi amobladoexcelente Ubicación cercano a Lineas de Subte y Transporte Publico. Las medidas, superficies y expensas consignadas en la presente son aproximadas, a solo título orientativo y no son vinculantes. Las medidas y superficies reales surgen del Título respectivo. grupo galcerán propiedadesVer datos", "Precio": 750000, "Expensas": 274000.0, "Direccion": "Cespedes al 2300", "Metros_Totales": 35.0, "Ambientes": 2.0, "Dormitorios": 1.0, "Baños": 1.0, "URL": "https://www.zonaprop.com.ar/propiedades/clasificado/alclapin-cespedes-2300-departamento-en-alquiler-2-ambientes-en-58065453.html?n_src=Listado&n_pills=Aire+acondicionado&n_pg=1&n_pos=1", "Bajo_Precio": "False", "Cocheras": null, "Etiqueta_Destacado": "Super destacado", "Porcentaje_Rebaja": null, "Metros_Cubiertos": null, "Antiguedad": null, "Descripcion_Breve": null, "Visitas_Count": null, "Visto_Estado": null, "Fecha_Publicacion": null, "Inmobiliaria": null, "lat": -34.5761886, "lon": -58.4532367 }, "geometry": { "type": "Point", "coordinates": [ -58.4532367, -34.5761886 ] } },
