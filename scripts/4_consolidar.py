@@ -11,21 +11,19 @@ import json
 import importlib
 
 parametros = importlib.import_module('0_parametros')
-cargar_configuraciones = parametros.cargar_configuraciones
+cargar_configuraciones_scraping = parametros.cargar_configuraciones_scraping
+PERFILES_DIR = parametros.PERFILES_DIR
 
-SCRIPT_DIR = pathlib.Path(__file__).parent
-BASE_PATH = SCRIPT_DIR / ".."
-DATA_DIR = BASE_PATH / "data"
-SHAPES_DIR = BASE_PATH / "shapes"
-OUTPUTS_DIR = BASE_PATH / "outputs"
-MASTER_GLOBAL_PATH = OUTPUTS_DIR / "data" / "departamentos_master_global.xlsx"
+DATA_DIR = PERFILES_DIR
+GLOBAL_DIR = PERFILES_DIR / "global"
+MASTER_GLOBAL_PATH = GLOBAL_DIR / "departamentos_master_global.xlsx"
 
 PRIORIDAD_PORTALES = ["zonaprop", "argenprop", "cabaprop"]
 
 # ================= SELECCION DE PERFIL =================
 
 def elegir_perfil():
-    configs = cargar_configuraciones()
+    configs = cargar_configuraciones_scraping()
     if not configs:
         print("No hay configuraciones guardadas.")
         return None
@@ -164,7 +162,7 @@ def actualizar_master_global():
     all_masters = []
     
     for perfil_dir in DATA_DIR.iterdir():
-        if not perfil_dir.is_dir():
+        if not perfil_dir.is_dir() or perfil_dir.name == "global":
             continue
         master_path = perfil_dir / "departamentos_master.xlsx"
         if master_path.exists():
@@ -183,7 +181,7 @@ def actualizar_master_global():
     global_df = global_df.drop_duplicates(subset='Direccion_norm', keep='first')
     global_df = global_df.drop(columns=['tiene_geo', '_perfil'], errors='ignore')
     
-    MASTER_GLOBAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    GLOBAL_DIR.mkdir(parents=True, exist_ok=True)
     global_df.to_excel(MASTER_GLOBAL_PATH, index=False)
     print(f"  Master global actualizado: {len(global_df)} registros -> {MASTER_GLOBAL_PATH}")
     
@@ -194,7 +192,7 @@ def actualizar_master_global():
             geometry=gpd.points_from_xy(df_geo['lon'], df_geo['lat']),
             crs="EPSG:4326"
         )
-        output_geojson = SHAPES_DIR / "departamentos_global.geojson"
+        output_geojson = GLOBAL_DIR / "departamentos_global.geojson"
         gdf.to_file(output_geojson, driver="GeoJSON")
         print(f"  GeoJSON global exportado: {output_geojson}")
 
@@ -210,7 +208,8 @@ def exportar_geojson(df, perfil_nombre):
         crs="EPSG:4326"
     )
     
-    output = SHAPES_DIR / f"departamentos_{perfil_nombre}.geojson"
+    output = DATA_DIR / perfil_nombre / "departamentos.geojson"
+    output.parent.mkdir(parents=True, exist_ok=True)
     gdf.to_file(output, driver="GeoJSON")
     print(f"  GeoJSON del perfil exportado: {output}")
 

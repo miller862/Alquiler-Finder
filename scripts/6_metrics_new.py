@@ -22,16 +22,17 @@ color_subte_map = auxiliar.color_subte_map
 color_gyms_map = auxiliar.color_gyms_map
 aplicar_colores_subte = auxiliar.aplicar_colores_subte
 aplicar_colores_gyms = auxiliar.aplicar_colores_gyms
-cargar_configuraciones = parametros.cargar_configuraciones
+cargar_configuraciones_scraping = parametros.cargar_configuraciones_scraping
+PERFILES_DIR = parametros.PERFILES_DIR
+BASE_PATH = parametros.BASE_PATH
 
 #%% SELECCION DE PERFIL
 script_dir = pathlib.Path(__file__).parent
-base_path = script_dir / ".."
-shapes_dir = (base_path / "shapes").resolve()
-outputs_dir = (base_path / "outputs").resolve()
+shapes_dir = (BASE_PATH / "shapes").resolve()
+perfil_outputs_dir = PERFILES_DIR  # cada perfil es subcarpeta
 
 print("\n=== SELECCION DE PERFIL ===")
-configs = cargar_configuraciones()
+configs = cargar_configuraciones_scraping()
 perfiles_disponibles = [cfg.get('nombre', 'Sin nombre') for cfg in configs]
 
 if not perfiles_disponibles:
@@ -50,7 +51,8 @@ if not (0 <= idx < len(perfiles_disponibles)):
     sys.exit(1)
 
 fuente_nombre = perfiles_disponibles[idx]
-geojson_path = shapes_dir / f"departamentos_{fuente_nombre}.geojson"
+geojson_path = PERFILES_DIR / fuente_nombre / "departamentos.geojson"
+outputs_dir = PERFILES_DIR / fuente_nombre
 
 if not geojson_path.exists():
     print(f"ERROR: No existe {geojson_path}")
@@ -359,7 +361,7 @@ if "FECHA_DETECCION" in df_scoring.columns:
     df_scoring["FECHA_DETECCION"] = df_scoring["FECHA_DETECCION"].fillna(fecha_hoy)
 
 print("\n6. Exportando ranking segmentado...")
-output_ranking = outputs_dir / f"ranking_{fuente_nombre}.xlsx"
+output_ranking = outputs_dir / "ranking.xlsx"
 
 columnas_export = [
     'REVISION', 'FECHA_DETECCION', 'Score', 'Tipo', 'Portal', 'Barrio', 'Direccion',
@@ -391,7 +393,8 @@ print("Columna REVISION lista para edicion manual.")
 departamentos_final = df_scoring.copy()
 
 print(f"\n7. Exportando datos enriquecidos...")
-output_excel = outputs_dir / f"departamentos_enriquecido_{fuente_nombre}.xlsx"
+outputs_dir.mkdir(parents=True, exist_ok=True)
+output_excel = outputs_dir / "departamentos_enriquecido.xlsx"
 departamentos_final.to_excel(output_excel, index=False)
 print(f"   Excel completo: {output_excel}")
 
@@ -400,7 +403,7 @@ gdf_output = gpd.GeoDataFrame(
     geometry=departamentos_final.geometry,
     crs="EPSG:4326"
 )
-output_geojson = outputs_dir / f"departamentos_enriquecido_{fuente_nombre}.geojson"
+output_geojson = outputs_dir / "departamentos_enriquecido.geojson"
 gdf_output.to_file(output_geojson, driver="GeoJSON")
 print(f"   GeoJSON enriquecido: {output_geojson}")
 
@@ -409,7 +412,7 @@ print("\n=== ACTUALIZANDO GLOBAL ===")
 
 all_enriquecidos = []
 for perfil in perfiles_disponibles:
-    excel_path = outputs_dir / f"departamentos_enriquecido_{perfil}.xlsx"
+    excel_path = PERFILES_DIR / perfil / "departamentos_enriquecido.xlsx"
     if excel_path.exists():
         df_perfil = pd.read_excel(excel_path)
         df_perfil['_perfil_origen'] = perfil
@@ -481,7 +484,9 @@ if all_enriquecidos:
     
     print(f"  Global: {len(global_df)} registros unicos, {global_df['Score'].notna().sum()} con score")
     
-    output_global_excel = outputs_dir / "departamentos_enriquecido_global.xlsx"
+    global_dir = PERFILES_DIR / "global"
+    global_dir.mkdir(parents=True, exist_ok=True)
+    output_global_excel = global_dir / "departamentos_enriquecido_global.xlsx"
     global_df.to_excel(output_global_excel, index=False)
     print(f"  Excel global: {output_global_excel}")
     
@@ -492,11 +497,11 @@ if all_enriquecidos:
             geometry=gpd.points_from_xy(global_df_geo['lon'], global_df_geo['lat']),
             crs="EPSG:4326"
         )
-        output_global_geojson = outputs_dir / "departamentos_enriquecido_global.geojson"
+        output_global_geojson = global_dir / "departamentos_enriquecido_global.geojson"
         gdf_global.to_file(output_global_geojson, driver="GeoJSON")
         print(f"  GeoJSON global: {output_global_geojson}")
     
-    output_ranking_global = outputs_dir / "ranking_global.xlsx"
+    output_ranking_global = global_dir / "ranking_global.xlsx"
     columnas_export = [
         'Score', 'Tipo', 'Portal', 'Barrio', 'Direccion',
         'Precio', 'Expensas', 'costo_total',

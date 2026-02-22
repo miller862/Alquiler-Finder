@@ -1,5 +1,12 @@
 import json
 import os
+import pathlib
+
+# Rutas base: perfiles/ en la raíz del proyecto
+SCRIPT_DIR = pathlib.Path(__file__).parent
+BASE_PATH = SCRIPT_DIR.parent
+PERFILES_DIR = BASE_PATH / "perfiles"
+CONFIG_FILE = PERFILES_DIR / "configuraciones.json"
 
 TIPOS_DISPONIBLES = {
     "departamento": "Departamento",
@@ -20,17 +27,22 @@ BARRIOS_DISPONIBLES = [
     "villa-soldati", "villa-urquiza"
 ]
 
-CONFIG_FILE = "configuraciones.json"
-
 def cargar_configuraciones():
-    if os.path.exists(CONFIG_FILE):
+    """Carga todas las configuraciones (incluye global)."""
+    if CONFIG_FILE.exists():
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     return []
 
+def cargar_configuraciones_scraping():
+    """Solo perfiles con config de búsqueda (excluye global)."""
+    configs = cargar_configuraciones()
+    return [c for c in configs if not c.get('es_global') and c.get('barrios')]
+
 def guardar_configuracion(config):
     configs = cargar_configuraciones()
     configs.append(config)
+    PERFILES_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(configs, f, indent=2, ensure_ascii=False)
 
@@ -65,7 +77,7 @@ def obtener_numero(prompt, minimo=None, maximo=None):
             print("  Ingresa un numero valido")
 
 def obtener_configuracion():
-    configs = cargar_configuraciones()
+    configs = cargar_configuraciones_scraping()
     
     if configs:
         print("\n=== CONFIGURACIONES GUARDADAS ===")
@@ -165,8 +177,12 @@ def obtener_configuracion():
     if guardar == 's':
         nombre_config = input("Nombre para esta configuracion: ").strip()
         if not nombre_config:
-            nombre_config = f"Config {len(configs) + 1}"
+            nombre_config = f"Config {len(cargar_configuraciones()) + 1}"
         config['nombre'] = nombre_config
+        usuario = input("Usuario para login en la app (Enter = nombre del perfil): ").strip() or nombre_config.lower()
+        password = input("Password para login (Enter = demo123): ").strip() or "demo123"
+        config['usuario'] = usuario
+        config['password'] = password
         guardar_configuracion(config)
         print(f"Configuracion '{nombre_config}' guardada.")
     

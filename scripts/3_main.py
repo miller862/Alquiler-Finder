@@ -17,6 +17,7 @@ parsers = importlib.import_module('2_parsers')
 
 obtener_configuracion = parametros.obtener_configuracion
 TIPOS_DISPONIBLES = parametros.TIPOS_DISPONIBLES
+PERFILES_DIR = parametros.PERFILES_DIR
 generar_todas_urls = url_builder.generar_todas_urls
 FILTROS_EXCLUSION = url_builder.FILTROS_EXCLUSION
 configurar = url_builder.configurar
@@ -32,7 +33,6 @@ if not os.path.exists(BRAVE_PATH):
     BRAVE_PATH = r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), 'data')
 TODAY_STR = datetime.now().strftime("%Y-%m-%d")
 
 # ================= FILTROS LÓGICOS =================
@@ -174,7 +174,7 @@ def save_data(data_list, portal_name, perfil_nombre):
     
     df = df[final_order]
     
-    target_folder = os.path.join(BASE_DATA_DIR, perfil_nombre, portal_name)
+    target_folder = os.path.join(str(PERFILES_DIR), perfil_nombre, portal_name)
     if not os.path.exists(target_folder): os.makedirs(target_folder)
     
     filename = f"{portal_name}_{TODAY_STR}.csv"

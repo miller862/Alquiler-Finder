@@ -12,20 +12,20 @@ import importlib
 
 parametros = importlib.import_module('0_parametros')
 auxiliar = importlib.import_module('5_auxiliar')
-cargar_configuraciones = parametros.cargar_configuraciones
+cargar_configuraciones_scraping = parametros.cargar_configuraciones_scraping
+PERFILES_DIR = parametros.PERFILES_DIR
+BASE_PATH = parametros.BASE_PATH
 color_subte_map = auxiliar.color_subte_map
 color_gyms_map = auxiliar.color_gyms_map
 aplicar_colores_subte = auxiliar.aplicar_colores_subte
 aplicar_colores_gyms = auxiliar.aplicar_colores_gyms
 
 script_dir = pathlib.Path(__file__).parent
-base_path = script_dir / ".."
-shapes_dir = (base_path / "shapes").resolve()
-outputs_dir = (base_path / "outputs").resolve()
+shapes_dir = (BASE_PATH / "shapes").resolve()
 
 print("\n=== VISUALIZACION INTERACTIVA ===", flush=True)
 
-configs = cargar_configuraciones()
+configs = cargar_configuraciones_scraping()
 perfiles_disponibles = [cfg.get('nombre', 'Sin nombre') for cfg in configs]
 
 print("\nOpciones:", flush=True)
@@ -52,7 +52,10 @@ modo_color = "score" if modo == "2" else "precio"
 
 print(f"\nCargando datos: {fuente_nombre}, modo: {modo_color}", flush=True)
 
-geojson_path = outputs_dir / f"departamentos_enriquecido_{fuente_nombre}.geojson"
+if fuente_nombre == "global":
+    geojson_path = PERFILES_DIR / "global" / "departamentos_enriquecido_global.geojson"
+else:
+    geojson_path = PERFILES_DIR / fuente_nombre / "departamentos_enriquecido.geojson"
 if not geojson_path.exists():
     print(f"ERROR: No existe {geojson_path}", flush=True)
     print("Ejecuta primero 6_metrics_new.py", flush=True)
