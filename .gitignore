@@ -8,4 +8,4 @@ __pycache__/
 .DS_Store
 
 # Datos y configuraciones por perfil (no subir al repo público)
-perfiles/
+#perfiles/ 
