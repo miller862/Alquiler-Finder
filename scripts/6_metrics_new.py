@@ -174,7 +174,7 @@ mask_depto_sin_expensas = (
     (df_scoring['Expensas'].isna() | (df_scoring['Expensas'] == 0))
 )
 df_scoring.loc[mask_depto_sin_expensas, 'apto_scoring'] = False
-print(f"   Aptas: {df_scoring['apto_scoring'].sum()}, No aptas: {(~df_scoring['apto_scoring']).sum()}")
+print(f"  Aptas: {df_scoring['apto_scoring'].sum()}, No aptas: {(~df_scoring['apto_scoring']).sum()}")
 
 print("3. Creando segmentos (Cocheras separadas, Ambientes con 0 cocheras)...")
 df_scoring['Cocheras'] = df_scoring['Cocheras'].fillna(0).astype(int)
@@ -186,7 +186,7 @@ df_scoring['segmento'] = df_scoring.apply(
 )
 
 segmentos = sorted(df_scoring['segmento'].unique())
-print(f"   Segmentos encontrados: {segmentos}")
+print(f"  Segmentos encontrados: {segmentos}")
 
 print("4. Calculando scoring por segmento...")
 
@@ -229,13 +229,141 @@ for seg in segmentos:
     if len(score_validos) > 0:
         df_scoring.loc[score_validos.index, 'Score'] = score_validos.sum(axis=1)
 
-print(f"   Propiedades con score: {df_scoring['Score'].notna().sum()}")
+print(f"  Propiedades con score: {df_scoring['Score'].notna().sum()}")
 
-print("5. Exportando ranking segmentado...")
+print("5. Preservando columna REVISION y FECHA_DETECCION de archivo previo...")
+ranking_previo_path = outputs_dir / f"ranking_{fuente_nombre}.xlsx"
+fecha_hoy = pd.Timestamp.now().strftime('%Y-%m-%d')
+
+def _txt_norm(v):
+    if pd.isna(v):
+        return ""
+    return " ".join(str(v).lower().strip().split())
+
+def _precio_norm(v):
+    if pd.isna(v):
+        return ""
+    try:
+        return str(int(float(v)))
+    except Exception:
+        return _txt_norm(v)
+
+def _desc_row(df):
+    if "Descripcion" in df.columns:
+        return df["Descripcion"].astype(str)
+    if "Titulo" in df.columns and "Descripcion_Breve" in df.columns:
+        return (df["Titulo"].fillna("").astype(str) + " " + df["Descripcion_Breve"].fillna("").astype(str))
+    if "Titulo" in df.columns:
+        return df["Titulo"].astype(str)
+    if "Descripcion_Breve" in df.columns:
+        return df["Descripcion_Breve"].astype(str)
+    return pd.Series([""] * len(df), index=df.index)
+
+def _safe_series(df, col):
+    if col in df.columns:
+        return df[col]
+    return pd.Series([""] * len(df), index=df.index)
+
+# Clave compuesta para conservar REVISION/FECHA entre ejecuciones
+df_scoring["join_key"] = (
+    _safe_series(df_scoring, "Portal").map(_txt_norm) + "|" +
+    _safe_series(df_scoring, "Direccion").map(_txt_norm) + "|" +
+    _desc_row(df_scoring).map(_txt_norm) + "|" +
+    _safe_series(df_scoring, "Precio").map(_precio_norm)
+)
+df_scoring["join_key_nod"] = (
+    _safe_series(df_scoring, "Portal").map(_txt_norm) + "|" +
+    _safe_series(df_scoring, "Direccion").map(_txt_norm) + "|" +
+    _safe_series(df_scoring, "Precio").map(_precio_norm)
+)
+
+if ranking_previo_path.exists():
+    print("  Archivo previo encontrado, cargando revisiones y fechas...")
+    sheets_previas = pd.read_excel(ranking_previo_path, sheet_name=None)
+    datos_previos = []
+
+    for _, df_prev in sheets_previas.items():
+        if "Portal" not in df_prev.columns or "Direccion" not in df_prev.columns or "Precio" not in df_prev.columns:
+            continue
+
+        df_prev_local = df_prev.copy()
+        df_prev_local["join_key"] = (
+            df_prev_local["Portal"].map(_txt_norm) + "|" +
+            df_prev_local["Direccion"].map(_txt_norm) + "|" +
+            _desc_row(df_prev_local).map(_txt_norm) + "|" +
+            df_prev_local["Precio"].map(_precio_norm)
+        )
+        df_prev_local["join_key_nod"] = (
+            df_prev_local["Portal"].map(_txt_norm) + "|" +
+            df_prev_local["Direccion"].map(_txt_norm) + "|" +
+            df_prev_local["Precio"].map(_precio_norm)
+        )
+
+        cols_a_preservar = ["join_key", "join_key_nod"]
+        if "REVISION" in df_prev_local.columns:
+            cols_a_preservar.append("REVISION")
+        if "FECHA_DETECCION" in df_prev_local.columns:
+            cols_a_preservar.append("FECHA_DETECCION")
+
+        datos_previos.append(df_prev_local[cols_a_preservar])
+
+    if datos_previos:
+        previos_df = pd.concat(datos_previos, ignore_index=True)
+        previos_df = previos_df.drop_duplicates(subset="join_key", keep="first")
+
+        # 1) Merge principal: clave completa (incluye descripcion)
+        df_scoring = df_scoring.merge(
+            previos_df[[c for c in ["join_key", "REVISION", "FECHA_DETECCION"] if c in previos_df.columns]],
+            on="join_key",
+            how="left"
+        )
+
+        # 2) Merge fallback: para archivos viejos sin descripcion exportada
+        faltan_estado = df_scoring["REVISION"].isna() if "REVISION" in df_scoring.columns else pd.Series([True] * len(df_scoring), index=df_scoring.index)
+        faltan_fecha = df_scoring["FECHA_DETECCION"].isna() if "FECHA_DETECCION" in df_scoring.columns else pd.Series([True] * len(df_scoring), index=df_scoring.index)
+        
+        # --- AQUI ESTA LA CORRECCION MEDIANTE .MAP() ---
+        if (faltan_estado | faltan_fecha).any():
+            prev_fallback = previos_df.drop_duplicates(subset="join_key_nod", keep="first").set_index("join_key_nod")
+            
+            if "REVISION" in df_scoring.columns and "REVISION" in prev_fallback.columns:
+                df_scoring.loc[faltan_estado, "REVISION"] = df_scoring.loc[faltan_estado, "join_key_nod"].map(prev_fallback["REVISION"])
+                
+            if "FECHA_DETECCION" in df_scoring.columns and "FECHA_DETECCION" in prev_fallback.columns:
+                df_scoring.loc[faltan_fecha, "FECHA_DETECCION"] = df_scoring.loc[faltan_fecha, "join_key_nod"].map(prev_fallback["FECHA_DETECCION"])
+        # -----------------------------------------------
+
+        if "REVISION" not in df_scoring.columns:
+            df_scoring["REVISION"] = None
+        if "FECHA_DETECCION" not in df_scoring.columns:
+            df_scoring["FECHA_DETECCION"] = fecha_hoy
+        else:
+            df_scoring["FECHA_DETECCION"] = pd.to_datetime(
+                df_scoring["FECHA_DETECCION"], errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
+            df_scoring["FECHA_DETECCION"] = df_scoring["FECHA_DETECCION"].fillna(fecha_hoy)
+
+        revisiones_recuperadas = df_scoring["REVISION"].notna().sum()
+        fechas_recuperadas = (df_scoring["FECHA_DETECCION"] != fecha_hoy).sum()
+        print(f"   {revisiones_recuperadas} revisiones preservadas, {fechas_recuperadas} fechas historicas preservadas")
+    else:
+        df_scoring["REVISION"] = None
+        df_scoring["FECHA_DETECCION"] = fecha_hoy
+        print("   No hay datos previos compatibles para merge")
+else:
+    df_scoring["REVISION"] = None
+    df_scoring["FECHA_DETECCION"] = fecha_hoy
+    print("   No hay archivo previo, todas las fechas son de hoy")
+
+if "FECHA_DETECCION" in df_scoring.columns:
+    df_scoring["FECHA_DETECCION"] = df_scoring["FECHA_DETECCION"].fillna(fecha_hoy)
+
+print("\n6. Exportando ranking segmentado...")
 output_ranking = outputs_dir / f"ranking_{fuente_nombre}.xlsx"
 
 columnas_export = [
-    'Score', 'Tipo', 'Portal', 'Barrio', 'Direccion',
+    'REVISION', 'FECHA_DETECCION', 'Score', 'Tipo', 'Portal', 'Barrio', 'Direccion',
+    'Titulo', 'Descripcion_Breve',
     'Precio', 'Expensas', 'costo_total',
     'Ambientes', 'Cocheras', 'Dormitorios', 'Baños',
     'Metros_Totales', 'Metros_Cubiertos',
@@ -244,6 +372,10 @@ columnas_export = [
     'dist_verde_final', 'cant_parque', 'cant_plaza',
     'URL'
 ]
+for col_tmp in ["join_key", "join_key_nod"]:
+    if col_tmp in df_scoring.columns:
+        df_scoring = df_scoring.drop(columns=[col_tmp])
+
 columnas_disponibles = [c for c in columnas_export if c in df_scoring.columns]
 
 with pd.ExcelWriter(output_ranking, engine='openpyxl') as writer:
@@ -254,10 +386,11 @@ with pd.ExcelWriter(output_ranking, engine='openpyxl') as writer:
         print(f"   Hoja '{seg}': {len(df_seg)} propiedades")
 
 print(f"\nRanking guardado en: {output_ranking}")
+print("Columna REVISION lista para edicion manual.")
 
 departamentos_final = df_scoring.copy()
 
-print(f"\n6. Exportando datos enriquecidos...")
+print(f"\n7. Exportando datos enriquecidos...")
 output_excel = outputs_dir / f"departamentos_enriquecido_{fuente_nombre}.xlsx"
 departamentos_final.to_excel(output_excel, index=False)
 print(f"   Excel completo: {output_excel}")
@@ -385,7 +518,3 @@ if all_enriquecidos:
     print(f"  Ranking global: {output_ranking_global}")
 
 print("\n=== CALCULO DE METRICAS COMPLETADO ===")
-
-#%% VISUALIZACION CON CAPAS DINAMICAS
-print("\n=== GENERANDO MAPA INTERACTIVO ===")
-print("Mapa del perfil procesado. Para ver el global, ejecuta 7_visualize.py")
