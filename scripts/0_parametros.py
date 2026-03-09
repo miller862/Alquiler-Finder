@@ -27,6 +27,41 @@ BARRIOS_DISPONIBLES = [
     "villa-soldati", "villa-urquiza"
 ]
 
+# ================= NORMALIZACIÓN (join / merge entre 4_consolidar y 6_metrics) =================
+
+def _is_na(v):
+    if v is None:
+        return True
+    if isinstance(v, float):
+        return v != v  # NaN
+    return False
+
+def url_normalize(v):
+    """URL normalizada: strip + lowercase. Usar para merge por URL entre scraping."""
+    if _is_na(v):
+        return ""
+    return str(v).strip().lower()
+
+def precio_norm_value(v):
+    """Precio normalizado para clave Direccion_norm|Precio_norm (entero como string)."""
+    if _is_na(v):
+        return ""
+    try:
+        return str(int(float(v)))
+    except (TypeError, ValueError):
+        return ""
+
+def direccion_norm_series(df, col="Direccion"):
+    """Serie Direccion normalizada: lowercase, strip."""
+    return df[col].astype(str).str.lower().str.strip()
+
+def join_key_direccion_precio(df):
+    """Clave secundaria de join: Direccion_norm + '|' + Precio_norm (sin descripción/título)."""
+    dir_n = df["Direccion"].astype(str).str.lower().str.strip()
+    prec = df["Precio"].apply(precio_norm_value)
+    return dir_n + "|" + prec
+
+
 def cargar_configuraciones():
     """Carga todas las configuraciones (incluye global)."""
     if CONFIG_FILE.exists():

@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block title %}Scraping — Deptos Scraper{% endblock %}
+
+{% block extra_style %}
+.run-status-pending { color: #6c7293; }
+.run-status-running { color: #fdae61; }
+.run-status-completed { color: #1a9641; }
+.run-status-failed { color: #d73027; }
+.table-dark-custom { --bs-table-bg: #1a1d27; --bs-table-striped-bg: #1e2235; --bs-table-border-color: #2d3148; color: #e0e0e0; font-size: .84rem; }
+.table-dark-custom th { background: #1e2235; color: #7c8cf8; font-size: .75rem; text-transform: uppercase; }
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+  <h4 class="mb-4"><i class="bi bi-robot"></i> Panel de Scraping</h4>
+
+  <div class="row g-4">
+    <!-- Formulario de disparo -->
+    <div class="col-lg-5">
+      <div class="card">
+        <div class="card-header"><strong>Iniciar nuevo scraping</strong></div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label">Perfil</label>
+            <select id="scrapePerfil" class="form-select">
+              {% for p in perfiles %}
+              <option value="{{ p.id }}">{{ p.nombre }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Portales</label>
+            <div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input portal-check" type="checkbox" value="zonaprop" id="pZona" checked>
+                <label class="form-check-label" for="pZona">Zonaprop</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input portal-check" type="checkbox" value="argenprop" id="pArgen" checked>
+                <label class="form-check-label" for="pArgen">Argenprop</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input portal-check" type="checkbox" value="cabaprop" id="pCaba" checked>
+                <label class="form-check-label" for="pCaba">Cabaprop</label>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="btnIniciarScraping">
+            <i class="bi bi-play-fill"></i> Iniciar Scraping
+          </button>
+          <div id="scrapeMsg" class="mt-2" style="font-size:.85rem;"></div>
+        </div>
+      </div>
+
+      <!-- Geocodificación y métricas -->
+      <div class="card mt-3">
+        <div class="card-header"><strong>Geocodificación y métricas</strong></div>
+        <div class="card-body">
+          <div class="mb-2">
+            <select id="geoPerfil" class="form-select form-select-sm mb-2">
+              {% for p in perfiles %}
+              <option value="{{ p.id }}">{{ p.nombre }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn btn-outline-secondary btn-sm me-2" id="btnGeocode">
+              <i class="bi bi-geo-alt"></i> Geocodificar pendientes
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" id="btnMetrics">
+              <i class="bi bi-calculator"></i> Calcular métricas
+            </button>
+          </div>
+          <div id="geoMsg" style="font-size:.82rem; color:#6c7293;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Historial de runs -->
+    <div class="col-lg-7">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between">
+          <strong>Historial de runs</strong>
+          <button class="btn btn-outline-secondary btn-sm" id="btnRefreshRuns">
+            <i class="bi bi-arrow-clockwise"></i> Actualizar
+          </button>
+        </div>
+        <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
+          <table class="table table-dark-custom mb-0">
+            <thead>
+              <tr>
+                <th>#</th><th>Perfil</th><th>Estado</th><th>Portales</th>
+                <th>Scraped</th><th>Nuevos</th><th>Actualizados</th><th>Inicio</th>
+              </tr>
+            </thead>
+            <tbody id="runsBody">
+              {% for run in runs %}
+              <tr>
+                <td>{{ run.id }}</td>
+                <td>{{ run.perfil_id or '—' }}</td>
+                <td class="run-status-{{ run.status }}"><strong>{{ run.status }}</strong></td>
+                <td style="font-size:.75rem;">{{ ', '.join(run.portales) }}</td>
+                <td>{{ run.total_scraped }}</td>
+                <td>{{ run.total_inserted }}</td>
+                <td>{{ run.total_updated }}</td>
+                <td style="font-size:.75rem;">{{ run.started_at.strftime('%d/%m %H:%M') if run.started_at else '—' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function iniciarScraping() {
+  const perfilId = parseInt(document.getElementById('scrapePerfil').value);
+  const portales = [...document.querySelectorAll('.portal-check:checked')].map(c => c.value);
+  if (!portales.length) { alert('Selecciona al menos un portal'); return; }
+
+  const btn = document.getElementById('btnIniciarScraping');
+  btn.disabled = true;
+  btn.textContent = 'Iniciando...';
+
+  const resp = await fetch('/api/scraping/run', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({perfil_id: perfilId, portales}),
+  });
+
+  btn.disabled = false;
+  btn.innerHTML = '<i class="bi bi-play-fill"></i> Iniciar Scraping';
+
+  const msg = document.getElementById('scrapeMsg');
+  if (resp.ok) {
+    const data = await resp.json();
+    msg.innerHTML = `<span style="color:#1a9641;">Run #${data.id} iniciado. El scraping corre en segundo plano.</span>`;
+    setTimeout(cargarRuns, 2000);
+  } else {
+    const err = await resp.json();
+    msg.innerHTML = `<span style="color:#d73027;">Error: ${err.detail}</span>`;
+  }
+}
+
+async function cargarRuns() {
+  const resp = await fetch('/api/scraping/runs', {credentials: 'include'});
+  const runs = await resp.json();
+  const body = document.getElementById('runsBody');
+  body.innerHTML = runs.map(r => {
+    const started = r.started_at ? new Date(r.started_at).toLocaleString('es-AR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+    return `<tr>
+      <td>${r.id}</td>
+      <td>${r.perfil_id || '—'}</td>
+      <td class="run-status-${r.status}"><strong>${r.status}</strong></td>
+      <td style="font-size:.75rem;">${r.portales.join(', ')}</td>
+      <td>${r.total_scraped}</td>
+      <td>${r.total_inserted}</td>
+      <td>${r.total_updated}</td>
+      <td style="font-size:.75rem;">${started}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function triggerGeocode() {
+  const perfilId = document.getElementById('geoPerfil').value;
+  const resp = await fetch(`/api/scraping/geocode/${perfilId}`, {method:'POST', credentials:'include'});
+  document.getElementById('geoMsg').textContent = resp.ok ? 'Geocodificación iniciada en segundo plano...' : 'Error al iniciar geocodificación';
+}
+
+async function triggerMetrics() {
+  const perfilId = document.getElementById('geoPerfil').value;
+  const resp = await fetch(`/api/scraping/metrics/${perfilId}`, {method:'POST', credentials:'include'});
+  document.getElementById('geoMsg').textContent = resp.ok ? 'Cálculo de métricas iniciado en segundo plano...' : 'Error al iniciar métricas';
+}
+
+document.getElementById('btnIniciarScraping').addEventListener('click', iniciarScraping);
+document.getElementById('btnRefreshRuns').addEventListener('click', cargarRuns);
+document.getElementById('btnGeocode').addEventListener('click', triggerGeocode);
+document.getElementById('btnMetrics').addEventListener('click', triggerMetrics);
+</script>
+{% endblock %}

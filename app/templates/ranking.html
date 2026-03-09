@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}Ranking — Deptos Scraper{% endblock %}
+
+{% block extra_style %}
+.table-dark-custom { --bs-table-bg: #1a1d27; --bs-table-striped-bg: #1e2235; --bs-table-hover-bg: #22263a; --bs-table-border-color: #2d3148; color: #e0e0e0; font-size: .84rem; }
+.table-dark-custom th { background: #1e2235; color: #7c8cf8; font-size: .75rem; text-transform: uppercase; letter-spacing: .5px; border-bottom: 2px solid #2d3148; }
+.score-badge { display: inline-block; width: 48px; text-align: center; border-radius: 4px; font-weight: 700; font-size: .78rem; padding: 2px 0; }
+.revision-cell { min-width: 100px; }
+.revision-cell input { background: transparent; border: 1px solid transparent; color: #e0e0e0; width: 100%; padding: 2px 4px; border-radius: 4px; font-size: .82rem; }
+.revision-cell input:focus { border-color: #7c8cf8; outline: none; background: #0f1117; }
+.link-prop { color: #7c8cf8; text-decoration: none; }
+.link-prop:hover { text-decoration: underline; }
+.filtros-top { background: #1a1d27; border-bottom: 1px solid #2d3148; padding: .75rem 1rem; }
+{% endblock %}
+
+{% block content %}
+<div class="filtros-top d-flex flex-wrap gap-2 align-items-center">
+  <select id="rankPerfil" class="form-select form-select-sm" style="width:200px;">
+    <option value="">Todos mis perfiles</option>
+    {% for p in perfiles %}
+    <option value="{{ p.id }}">{{ p.nombre }}</option>
+    {% endfor %}
+  </select>
+  <select id="rankSegmento" class="form-select form-select-sm" style="width:140px;">
+    <option value="">Todos los segmentos</option>
+  </select>
+  <input type="text" id="rankSearch" class="form-control form-control-sm" placeholder="Buscar dirección..." style="width:200px;">
+  <div class="form-check ms-2">
+    <input class="form-check-input" type="checkbox" id="rankSoloActivos" checked>
+    <label class="form-check-label" for="rankSoloActivos">Solo activos</label>
+  </div>
+  <button class="btn btn-primary btn-sm" id="btnCargarRanking">Cargar</button>
+  <button class="btn btn-outline-secondary btn-sm" id="btnDescargarCSV"><i class="bi bi-download"></i> CSV</button>
+  <span class="text-secondary ms-2" id="rankCount" style="font-size:.85rem;"></span>
+</div>
+
+<div class="p-3" style="overflow-x: auto; height: calc(100vh - 112px);">
+  <table class="table table-dark-custom table-striped table-hover align-middle">
+    <thead>
+      <tr>
+        <th>Revisión</th>
+        <th>Fecha detec.</th>
+        <th class="sortable" data-col="score">Score ▲▼</th>
+        <th>Portal</th>
+        <th>Barrio</th>
+        <th>Dirección</th>
+        <th class="sortable" data-col="precio">Precio ▲▼</th>
+        <th>Expensas</th>
+        <th>Costo total</th>
+        <th>Amb</th>
+        <th>Dorm</th>
+        <th>M² cub</th>
+        <th>Subte</th>
+        <th>Verde</th>
+        <th>Gym</th>
+        <th>Visto</th>
+        <th>Link</th>
+      </tr>
+    </thead>
+    <tbody id="rankingBody"></tbody>
+  </table>
+</div>
+
+<script>
+let allData = [];
+let sortCol = 'score';
+let sortAsc = false;
+
+const perfilSel = document.getElementById('rankPerfil');
+const segSel = document.getElementById('rankSegmento');
+const searchInput = document.getElementById('rankSearch');
+const soloActivos = document.getElementById('rankSoloActivos');
+const body = document.getElementById('rankingBody');
+const countEl = document.getElementById('rankCount');
+
+function scoreColor(s) {
+  if (s === null || s === undefined) return '#333';
+  if (s >= 70) return '#1a9641';
+  if (s >= 45) return '#fd8d3c';
+  return '#d73027';
+}
+
+function fmt(v, suffix='') {
+  if (v === null || v === undefined) return '-';
+  return Number(v).toLocaleString('es-AR') + suffix;
+}
+
+function buildRow(d) {
+  const p = d.properties;
+  const score = p.score !== null ? p.score.toFixed(1) : null;
+  const scoreBadge = score !== null
+    ? `<span class="score-badge" style="background:${scoreColor(p.score)};color:#fff;">${score}</span>`
+    : '<span style="color:#555">—</span>';
+
+  return `<tr>
+    <td class="revision-cell"><input type="text" value="${p.revision || ''}" data-id="${p.id}" class="rev-input" placeholder="Anotar..." /></td>
+    <td style="font-size:.75rem;color:#6c7293;">${p.fecha_deteccion || '—'}</td>
+    <td>${scoreBadge}</td>
+    <td><span class="badge bg-secondary">${p.portal}</span></td>
+    <td>${p.barrio || '—'}</td>
+    <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${p.direccion || ''}">${p.direccion || '—'}</td>
+    <td>$${fmt(p.precio)}</td>
+    <td>${p.expensas ? '$' + fmt(p.expensas) : '—'}</td>
+    <td><strong>$${fmt(p.costo_total)}</strong></td>
+    <td>${p.ambientes ?? '—'}</td>
+    <td>${p.dormitorios ?? '—'}</td>
+    <td>${p.metros_cubiertos ? p.metros_cubiertos + 'm²' : '—'}</td>
+    <td>${p.distancia_m_subte ? fmt(p.distancia_m_subte) + 'm' : '—'}</td>
+    <td>${p.dist_verde_final ? fmt(p.dist_verde_final) + 'm' : '—'}</td>
+    <td>${p.distancia_m_gym ? fmt(p.distancia_m_gym) + 'm' : '—'}</td>
+    <td>${p.veces_visto ?? 1}x</td>
+    <td>${p.url ? `<a href="${p.url}" target="_blank" class="link-prop"><i class="bi bi-box-arrow-up-right"></i></a>` : '—'}</td>
+  </tr>`;
+}
+
+async function cargarDatos() {
+  const perfilId = perfilSel.value;
+  const globalView = perfilId === 'global';
+  const activo = soloActivos.checked ? 'true' : '';
+
+  let url = `/api/departamentos?activo=${activo}`;
+  if (globalView) url += '&global_view=true';
+  else if (perfilId) url += `&perfil_id=${perfilId}`;
+
+  const resp = await fetch(url, {credentials: 'include'});
+  const gj = await resp.json();
+  allData = (gj.features || []).filter(f => f.geometry);
+
+  // Actualizar opciones de segmentos
+  const segs = [...new Set(allData.map(f => f.properties.segmento).filter(Boolean))].sort();
+  segSel.innerHTML = '<option value="">Todos los segmentos</option>' + segs.map(s => `<option value="${s}">${s}</option>`).join('');
+
+  renderTabla();
+}
+
+function renderTabla() {
+  let data = [...allData];
+  const seg = segSel.value;
+  const q = searchInput.value.toLowerCase();
+
+  if (seg) data = data.filter(f => f.properties.segmento === seg);
+  if (q) data = data.filter(f => (f.properties.direccion || '').toLowerCase().includes(q));
+
+  // Ordenar
+  data.sort((a, b) => {
+    const va = a.properties[sortCol] ?? -Infinity;
+    const vb = b.properties[sortCol] ?? -Infinity;
+    return sortAsc ? va - vb : vb - va;
+  });
+
+  body.innerHTML = data.map(buildRow).join('');
+  countEl.textContent = `${data.length} propiedades`;
+
+  // Eventos de revisión
+  document.querySelectorAll('.rev-input').forEach(input => {
+    let timer;
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => saveRevision(input.dataset.id, input.value), 800);
+    });
+  });
+}
+
+async function saveRevision(id, revision) {
+  await fetch(`/api/departamentos/${id}`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({revision}),
+  });
+}
+
+function downloadCSV() {
+  if (!allData.length) return;
+  const cols = ['id','portal','barrio','direccion','precio','expensas','costo_total','ambientes','dormitorios','metros_cubiertos','score','segmento','distancia_m_subte','dist_verde_final','fecha_deteccion','revision','url'];
+  const rows = allData.map(f => cols.map(c => f.properties[c] ?? '').join(','));
+  const csv = cols.join(',') + '\n' + rows.join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'deptos_ranking.csv';
+  a.click();
+}
+
+document.getElementById('btnCargarRanking').addEventListener('click', cargarDatos);
+document.getElementById('btnDescargarCSV').addEventListener('click', downloadCSV);
+segSel.addEventListener('change', renderTabla);
+searchInput.addEventListener('input', renderTabla);
+
+document.querySelectorAll('.sortable').forEach(th => {
+  th.style.cursor = 'pointer';
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = false; }
+    renderTabla();
+  });
+});
+
+cargarDatos();
+</script>
+{% endblock %}

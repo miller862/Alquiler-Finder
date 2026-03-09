@@ -1,3 +1,4 @@
+
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -93,7 +94,7 @@ def scrape_portal(driver, portal_name, urls_data, parser_func, next_xpath, max_p
             print(f"  📍 {barrio.upper()} | {tipo_label.upper()}")
             
             driver.get(url_inicial)
-            time.sleep(3)
+            time.sleep(6)
             
             current_page = 1
             while current_page <= max_pages:
@@ -125,11 +126,11 @@ def scrape_portal(driver, portal_name, urls_data, parser_func, next_xpath, max_p
                 
                 try:
                     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(1)
+                    time.sleep(2)
                     next_btns = driver.find_elements(By.XPATH, next_xpath)
                     if not next_btns or not next_btns[0].is_enabled(): break
                     driver.execute_script("arguments[0].click();", next_btns[0])
-                    time.sleep(4)
+                    time.sleep(5)
                     current_page += 1
                 except: break
     

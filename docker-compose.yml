@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: deptos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deptos_dev}
+      POSTGRES_DB: deptos_scraper
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deptos -d deptos_scraper"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://deptos:${POSTGRES_PASSWORD:-deptos_dev}@db:5432/deptos_scraper
+      SYNC_DATABASE_URL: postgresql+psycopg2://deptos:${POSTGRES_PASSWORD:-deptos_dev}@db:5432/deptos_scraper
+      SECRET_KEY: ${SECRET_KEY:-changeme-set-a-real-secret-in-env}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      DEBUG: "false"
+      DOCKER_ENV: "true"
+      SHAPES_DIR: /app/shapes
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./shapes:/app/shapes:ro
+
+volumes:
+  postgres_data:

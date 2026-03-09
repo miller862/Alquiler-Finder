@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source /c/Users/mmill/anaconda3/etc/profile.d/conda.sh)",
+      "Bash(conda activate PYR)",
+      "Bash(python -c \"import secrets; print\\(secrets.token_hex\\(32\\)\\)\")",
+      "Bash(chcp)",
+      "Bash(docker ps --format \"table {{.Names}}\\\\t{{.Status}}\\\\t{{.Ports}}\")",
+      "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"SELECT 1 AS test;\")",
+      "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"SELECT count\\(*\\) FROM users;\")",
+      "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"SELECT id, username, is_admin, hashed_password FROM users;\")"
+    ]
+  }
+}

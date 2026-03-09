@@ -1,26 +1,33 @@
-# 1. Usamos una imagen oficial de Python ligera
-FROM python:3.10-slim
+FROM python:3.12-slim
 
-# 2. Instalamos dependencias  para GeoPandas 
-RUN apt-get update && apt-get install -y \
+# Dependencias de sistema: GDAL (GeoPandas), Chromium (Selenium headless)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
     libgdal-dev \
+    chromium \
+    chromium-driver \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Establecemos el directorio de trabajo dentro del contenedor
 WORKDIR /app
 
-# 4. Copiamos el archivo de requerimientos primero (para aprovechar el caché de Docker)
+# Instalar dependencias Python
 COPY requirements.txt .
-
-# 5. Instalamos las librerías de Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 6. Copiamos TODO el contenido de tu proyecto al contenedor (scripts, shapes, outputs, etc.)
-COPY . .
+# Copiar código fuente
+COPY app/ ./app/
+COPY migrations/ ./migrations/
+COPY alembic.ini .
+COPY shapes/ ./shapes/
 
-# 7. Exponemos el puerto que usa Streamlit
-EXPOSE 8501
+# Puerto FastAPI
+EXPOSE 8000
 
-# 8. Comando para ejecutar tu app indicando la ruta correcta del script
-CMD ["streamlit", "run", "scripts/8_streamlit_deploy.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Variables de entorno para Selenium headless en Docker
+ENV DOCKER_ENV=true
+ENV CHROME_BIN=/usr/bin/chromium
+
+# Entrypoint: corre migraciones y luego inicia la app
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+CMD ["./entrypoint.sh"]

@@ -13,6 +13,9 @@ import importlib
 parametros = importlib.import_module('0_parametros')
 cargar_configuraciones_scraping = parametros.cargar_configuraciones_scraping
 PERFILES_DIR = parametros.PERFILES_DIR
+url_normalize = parametros.url_normalize
+precio_norm_value = parametros.precio_norm_value
+join_key_direccion_precio = parametros.join_key_direccion_precio
 
 DATA_DIR = PERFILES_DIR
 GLOBAL_DIR = PERFILES_DIR / "global"
@@ -74,22 +77,29 @@ def cargar_csvs_perfil(perfil_nombre):
     return pd.concat(dfs, ignore_index=True)
 
 # ================= DEDUP =================
+# Misma normalización que en 6_metrics: URL_norm y Direccion_norm|Precio_norm.
 
 def dedup_inter_portal(df):
     df['Direccion_norm'] = df['Direccion'].astype(str).str.lower().str.strip()
+    if 'URL' in df.columns:
+        df['URL_norm'] = df['URL'].apply(url_normalize)
+    else:
+        df['URL_norm'] = ''
     
     df['portal_orden'] = df['Portal'].map(
         {p: i for i, p in enumerate(PRIORIDAD_PORTALES)}
     ).fillna(99).astype(int)
-    
     df = df.sort_values('portal_orden')
     
+    # Prioridad 1: dedup por URL normalizada (subset estable entre scrapes)
+    df = df.drop_duplicates(subset=['URL_norm'], keep='first')
+    # Prioridad 2: resto por Direccion_norm + Precio + Tipo + Ambientes
     df = df.drop_duplicates(
         subset=['Direccion_norm', 'Precio', 'Tipo', 'Ambientes'],
         keep='first'
     )
     
-    df = df.drop(columns=['portal_orden'])
+    df = df.drop(columns=['portal_orden', 'URL_norm'], errors='ignore')
     return df.reset_index(drop=True)
 
 # ================= GEOCODIFICACION =================
@@ -112,21 +122,48 @@ def geocode_google(gmaps_client, address):
     return None, None
 
 def preservar_geocoding(df_nuevo, master_global):
+    """Preserva geocoding en dos pasadas: 1) por URL normalizada, 2) por Direccion_norm|Precio_norm."""
     if master_global is None or master_global.empty:
         df_nuevo['lat'] = None
         df_nuevo['lon'] = None
         return df_nuevo
     
-    master_global['Direccion_norm'] = master_global['Direccion'].astype(str).str.lower().str.strip()
+    df_nuevo['Direccion_norm'] = df_nuevo['Direccion'].astype(str).str.lower().str.strip()
+    df_nuevo['Precio_norm'] = df_nuevo['Precio'].apply(precio_norm_value)
+    df_nuevo['join_dir_precio'] = df_nuevo['Direccion_norm'] + '|' + df_nuevo['Precio_norm']
+    if 'URL' in df_nuevo.columns:
+        df_nuevo['URL_norm'] = df_nuevo['URL'].apply(url_normalize)
+    else:
+        df_nuevo['URL_norm'] = ''
     
-    geo_cache = master_global[master_global['lat'].notna()][
-        ['Direccion_norm', 'lat', 'lon']
-    ].drop_duplicates(subset='Direccion_norm', keep='first')
+    master_global = master_global.copy()
+    master_global['Direccion_norm'] = master_global['Direccion'].astype(str).str.lower().str.strip()
+    master_global['Precio_norm'] = master_global['Precio'].apply(precio_norm_value)
+    master_global['join_dir_precio'] = master_global['Direccion_norm'] + '|' + master_global['Precio_norm']
+    master_global['URL_norm'] = master_global['URL'].apply(url_normalize) if 'URL' in master_global.columns else ''
     
     if 'lat' in df_nuevo.columns:
         df_nuevo = df_nuevo.drop(columns=['lat', 'lon'])
     
-    df_nuevo = df_nuevo.merge(geo_cache, on='Direccion_norm', how='left')
+    # Pasada 1: merge por URL normalizada
+    geo_url = master_global[master_global['lat'].notna() & (master_global['URL_norm'] != '')][
+        ['URL_norm', 'lat', 'lon']
+    ].drop_duplicates(subset='URL_norm', keep='first')
+    df_nuevo = df_nuevo.merge(geo_url, on='URL_norm', how='left')
+    
+    # Pasada 2: para los que no matchearon, merge por Direccion_norm|Precio_norm
+    sin_geo = df_nuevo['lat'].isna()
+    if sin_geo.any():
+        geo_dir = master_global[master_global['lat'].notna()][
+            ['join_dir_precio', 'lat', 'lon']
+        ].drop_duplicates(subset='join_dir_precio', keep='first')
+        df_fill = df_nuevo.loc[sin_geo, ['join_dir_precio']].merge(
+            geo_dir, on='join_dir_precio', how='left'
+        )
+        df_nuevo.loc[sin_geo, 'lat'] = df_fill['lat'].values
+        df_nuevo.loc[sin_geo, 'lon'] = df_fill['lon'].values
+    
+    df_nuevo = df_nuevo.drop(columns=['join_dir_precio', 'URL_norm', 'Precio_norm'], errors='ignore')
     return df_nuevo
 
 def geocodificar_nuevos(df, gmaps_client, checkpoint_interval=50):
