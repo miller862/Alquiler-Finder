@@ -30,7 +30,7 @@ def _map_item_to_fields(item: dict, perfil_id: int) -> dict:
     precio = _parse_int(item.get("Precio"))
     direccion = item.get("Direccion", "") or ""
 
-    return {
+    result = {
         "portal": portal,
         "perfil_id": perfil_id,
         "barrio_scrapeado": item.get("Barrio"),
@@ -64,6 +64,34 @@ def _map_item_to_fields(item: dict, perfil_id: int) -> dict:
         "fecha_deteccion": date.today(),
         "veces_visto": 1,
     }
+
+    # Include metric fields if present (from staging pipeline)
+    _metric_map = {
+        "lat": "lat", "lon": "lon",
+        "snap_warning": "snap_warning", "barrio_geo": "barrio_geo",
+        "distancia_m_gym": "distancia_m_gym", "cant_gym": "cant_gym",
+        "distancia_m_subte": "distancia_m_subte", "cant_subte": "cant_subte",
+        "distancia_m_parque": "distancia_m_parque", "cant_parque": "cant_parque",
+        "distancia_m_plaza": "distancia_m_plaza", "cant_plaza": "cant_plaza",
+        "segmento": "segmento", "Score": "score", "apto_scoring": "apto_scoring",
+    }
+    for src_key, db_key in _metric_map.items():
+        val = item.get(src_key)
+        if val is not None:
+            if db_key in ("lat", "lon", "score"):
+                try:
+                    result[db_key] = float(val)
+                except (ValueError, TypeError):
+                    pass
+            elif db_key in ("snap_warning", "apto_scoring"):
+                result[db_key] = bool(val)
+            elif db_key in ("distancia_m_gym", "cant_gym", "distancia_m_subte", "cant_subte",
+                            "distancia_m_parque", "cant_parque", "distancia_m_plaza", "cant_plaza"):
+                result[db_key] = _parse_int(val)
+            else:
+                result[db_key] = str(val) if val else None
+
+    return result
 
 
 def upsert_items_sync(
@@ -124,6 +152,17 @@ def upsert_items_sync(
                 if url_n and not existing.url_norm:
                     existing.url = fields.get("url")
                     existing.url_norm = url_n
+                # Update metric fields if present (from staging pipeline)
+                _metric_db_keys = [
+                    "lat", "lon", "snap_warning", "barrio_geo",
+                    "distancia_m_gym", "cant_gym", "distancia_m_subte", "cant_subte",
+                    "distancia_m_parque", "cant_parque", "distancia_m_plaza", "cant_plaza",
+                    "segmento", "score", "apto_scoring",
+                ]
+                for mk in _metric_db_keys:
+                    val = fields.get(mk)
+                    if val is not None:
+                        setattr(existing, mk, val)
                 db.add(existing)
                 updated += 1
             else:
@@ -186,4 +225,62 @@ def geocodificar_pendientes_sync(perfil_id: int, api_key: str) -> int:
         db.commit()
 
     logger.info(f"Geocodificación completada: {geocodificadas} propiedades")
+    return geocodificadas
+
+
+# ---------------------------------------------------------------------------
+# Geocode items from staging JSON (per-run, not per-perfil)
+# ---------------------------------------------------------------------------
+
+def _clean_address_for_geocoding(addr: str) -> str:
+    import re
+    addr_clean = re.sub(r"C\.A\.B\.A|CABA| - ", " ", addr, flags=re.I)
+    return f"{addr_clean}, Ciudad Autónoma de Buenos Aires, Argentina"
+
+
+def geocode_run_items(run_id: int, api_key: str, progress_callback=None) -> int:
+    """
+    Geocode items stored in staging JSON for a scrape run.
+    Updates the JSON in place with lat/lon.
+    Returns count geocoded.
+    """
+    import googlemaps
+    from app.services.scraping_service import load_staging, save_staging
+
+    def log(msg: str) -> None:
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(msg)
+
+    items = load_staging(run_id)
+    if not items:
+        log("No hay items en staging para geocodificar.")
+        return 0
+
+    gmaps = googlemaps.Client(key=api_key)
+    geocodificadas = 0
+    pendientes = [i for i in items if not i.get("lat") and i.get("Direccion")]
+
+    log(f"Geocodificando {len(pendientes)} de {len(items)} items...")
+
+    for item in pendientes:
+        addr = item.get("Direccion", "")
+        full_address = _clean_address_for_geocoding(addr)
+
+        try:
+            result_geo = gmaps.geocode(full_address)
+            if result_geo:
+                loc = result_geo[0]["geometry"]["location"]
+                item["lat"] = loc["lat"]
+                item["lon"] = loc["lng"]
+                geocodificadas += 1
+        except Exception as e:
+            logger.warning(f"Error geocodificando {addr}: {e}")
+
+        if geocodificadas % 50 == 0 and geocodificadas > 0:
+            save_staging(run_id, items)
+            log(f"  Checkpoint: {geocodificadas}/{len(pendientes)} geocodificadas")
+
+    save_staging(run_id, items)
+    log(f"Geocodificacion completada: {geocodificadas} items")
     return geocodificadas

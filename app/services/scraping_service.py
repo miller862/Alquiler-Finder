@@ -1,19 +1,17 @@
 """
-Motor de scraping con Selenium + Brave/Chrome.
-Port de scripts/3_main.py con:
-  - Sin CLI interactivo (recibe config por parámetro)
-  - WebDriverWait en lugar de time.sleep fijo
-  - Sesión sincrónica para correr como BackgroundTask
-  - En Docker: por defecto Chromium headless (uc); si SCRAPER_BROWSER_URL está definido,
-    se conecta a un navegador en el host (tu perfil, Zonaprop sin captcha) y corre en segundo plano.
+Motor de scraping con undetected_chromedriver.
+  - Local: abre Chrome/Chromium visible (permite resolver CAPTCHAs manualmente)
+  - Docker: headless con uc
+  - Resultados se guardan como JSON en staging/ (no se escribe a departamentos)
+  - CAPTCHA poll loop: si ZonaProp muestra captcha, espera hasta 2 min
 """
+import json
 import os
+import pathlib
 import time
 import logging
 from datetime import datetime, date
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -21,19 +19,13 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from app.services.url_builder_service import build_all_urls
 from app.services.parser_service import parse_zonaprop, parse_argenprop, parse_cabaprop
-from app.services.consolidation_service import upsert_items_sync
 from app.core.normalization import url_normalize
 from app.core.constants import TIPOS_DISPONIBLES
 
 logger = logging.getLogger(__name__)
 
-HOME_DIR = os.path.expanduser("~")
-
-# User-Agent de Chrome real (Windows) para anti-detección
-CHROME_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
+STAGING_DIR = pathlib.Path(__file__).parent.parent.parent / "staging"
+STAGING_DIR.mkdir(exist_ok=True)
 
 # Selectores CSS para WebDriverWait por portal
 FIRST_CARD_SELECTORS = {
@@ -54,59 +46,67 @@ PARSERS = {
     "cabaprop": parse_cabaprop,
 }
 
-# Zonaprop: como el script 3_main — delay fijo y parse, sin esperar al primer card (evita timeout cuando hay captcha/lentitud)
 ZONAPROP_INITIAL_DELAY = 8
 ZONAPROP_RETRY_DELAY = 5
+CAPTCHA_POLL_INTERVAL = 5
+CAPTCHA_TIMEOUT = 120
 
 
-def _common_anti_detection_options(options: Options) -> None:
-    """Opciones de anti-detección comunes (user-agent, ventana, idioma)."""
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--lang=es-AR")
-    options.add_argument("--disable-infobars")
-    options.add_argument(f"--user-agent={CHROME_USER_AGENT}")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
+# ---------------------------------------------------------------------------
+# Staging helpers
+# ---------------------------------------------------------------------------
+
+def _staging_path(run_id: int) -> pathlib.Path:
+    return STAGING_DIR / f"run_{run_id}.json"
 
 
-def setup_driver(headless: bool = False) -> webdriver.Chrome:
+def save_staging(run_id: int, items: list[dict]) -> None:
+    _staging_path(run_id).write_text(json.dumps(items, ensure_ascii=False, default=str), encoding="utf-8")
+
+
+def load_staging(run_id: int) -> list[dict]:
+    path = _staging_path(run_id)
+    if not path.exists():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def delete_staging(run_id: int) -> None:
+    path = _staging_path(run_id)
+    if path.exists():
+        path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# Driver setup — undetected_chromedriver for all environments
+# ---------------------------------------------------------------------------
+
+def setup_driver() -> "webdriver.Chrome":
+    import undetected_chromedriver as uc
+
     docker_env = os.environ.get("DOCKER_ENV", "false").lower() == "true"
 
-    if docker_env or headless:
-        # Por defecto intentamos conectar al navegador del host (Brave con tu perfil = Zonaprop sin captcha).
-        # Si no está corriendo, hacemos fallback a Chromium en Docker.
-        remote_url = os.environ.get("SCRAPER_BROWSER_URL", "").strip()
-        if remote_url:
-            try:
-                return _setup_driver_remote_browser(remote_url)
-            except Exception as e:
-                logger.warning(
-                    "No se pudo conectar al navegador del host (%s): %s. Usando Chromium en Docker.",
-                    remote_url,
-                    e,
-                )
-
-        # Chromium headless en Docker (o fallback si no hay navegador en el host)
-        try:
-            import undetected_chromedriver as uc
-        except ImportError:
-            logger.warning("undetected_chromedriver no instalado, usando Selenium estándar")
-            return _setup_driver_selenium_headless()
-
+    if docker_env:
         chrome_bin = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
         options = uc.ChromeOptions()
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--headless=new")
-        _common_anti_detection_options(options)
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--lang=es-AR")
+
+        # Use system chromedriver (chromium-driver apt package) to avoid version mismatch
+        # with the auto-downloaded one. Falls back to env var if system driver not found.
+        driver_exec = None
+        system_driver = os.environ.get("CHROMEDRIVER_BIN", "/usr/bin/chromedriver")
+        if os.path.exists(system_driver):
+            driver_exec = system_driver
 
         version_main = None
         if os.environ.get("CHROME_VERSION_MAIN"):
             try:
-                version_main = int(os.environ.get("CHROME_VERSION_MAIN", "0"))
+                version_main = int(os.environ["CHROME_VERSION_MAIN"])
             except ValueError:
                 pass
 
@@ -116,68 +116,26 @@ def setup_driver(headless: bool = False) -> webdriver.Chrome:
             "browser_executable_path": chrome_bin,
             "use_subprocess": True,
         }
+        if driver_exec:
+            kwargs["driver_executable_path"] = driver_exec
         if version_main:
             kwargs["version_main"] = version_main
 
-        driver = uc.Chrome(**kwargs)
-        return driver
+        return uc.Chrome(**kwargs)
 
-    # Local (app no en Docker): Brave con perfil real, como el script original
-    options = Options()
-    brave_paths = [
-        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-        r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
-    ]
-    brave_path = next((p for p in brave_paths if os.path.exists(p)), None)
-    if brave_path:
-        options.binary_location = brave_path
-        user_data = os.path.join(
-            HOME_DIR, r"AppData\Local\BraveSoftware\Brave-Browser\User Data"
-        )
-        options.add_argument(f"--user-data-dir={user_data}")
-        options.add_argument("--profile-directory=Default")
+    # Local: visible (para resolver CAPTCHAs manualmente)
+    options = uc.ChromeOptions()
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--lang=es-AR")
+    options.add_argument("--disable-notifications")
 
-    _common_anti_detection_options(options)
-
-    driver = webdriver.Chrome(options=options)
-    driver.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    )
-    return driver
+    return uc.Chrome(options=options, headless=False)
 
 
-def _setup_driver_remote_browser(debugger_address: str) -> webdriver.Chrome:
-    """
-    Conecta al navegador que ya está corriendo en el host (remote debugging).
-    Ese navegador puede ser Brave con tu perfil, en headless, así Zonaprop no pide captcha
-    y todo corre en segundo plano.
-    """
-    if "://" in debugger_address:
-        debugger_address = debugger_address.replace("http://", "").replace("https://", "")
-    options = Options()
-    options.add_experimental_option("debuggerAddress", debugger_address)
-    logger.info("Conectando al navegador en el host: %s", debugger_address)
-    return webdriver.Chrome(options=options)
+# ---------------------------------------------------------------------------
+# CAPTCHA detection
+# ---------------------------------------------------------------------------
 
-
-def _setup_driver_selenium_headless() -> webdriver.Chrome:
-    """Fallback: Selenium estándar headless cuando uc no está disponible."""
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.binary_location = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
-    _common_anti_detection_options(options)
-
-    driver = webdriver.Chrome(options=options)
-    driver.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    )
-    return driver
-
-
-# Palabras clave para detectar página de captcha/bloqueo anti-bot
 _CAPTCHA_KEYWORDS = (
     "captcha",
     "verificación",
@@ -191,8 +149,7 @@ _CAPTCHA_KEYWORDS = (
 )
 
 
-def _page_looks_like_captcha(driver: webdriver.Chrome) -> bool:
-    """True si el título o el HTML sugieren captcha o bloqueo anti-bot."""
+def _page_looks_like_captcha(driver) -> bool:
     try:
         title = (driver.title or "").lower()
         html_snippet = (driver.page_source or "")[:2000].lower()
@@ -201,6 +158,10 @@ def _page_looks_like_captcha(driver: webdriver.Chrome) -> bool:
     except Exception:
         return False
 
+
+# ---------------------------------------------------------------------------
+# Filters
+# ---------------------------------------------------------------------------
 
 def is_excluded(row: dict, filtros_exclusion: list[str]) -> bool:
     text_check = (
@@ -235,19 +196,18 @@ def is_valid_price(row: dict) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Portal scraping
+# ---------------------------------------------------------------------------
+
 def scrape_portal(
-    driver: webdriver.Chrome,
+    driver,
     portal_name: str,
     urls_data: dict,
     config: dict,
     max_pages: int = 3,
     progress_callback=None,
 ) -> list[dict]:
-    """
-    Raspa un portal usando WebDriverWait (más confiable que time.sleep fijo).
-    Retorna lista de items sin filtrar.
-    Si progress_callback(line: str) está definido, se llama con cada mensaje de progreso.
-    """
     def log(msg: str) -> None:
         logger.info(msg)
         if progress_callback:
@@ -274,12 +234,10 @@ def scrape_portal(
             try:
                 driver.get(url_inicial)
             except WebDriverException as e:
-                logger.error(f"    Error de driver: {e}")
-                if progress_callback:
-                    progress_callback(f"    [ERROR] {portal_name}: {e}")
+                log(f"    [ERROR] {portal_name}: {e}")
                 continue
 
-            # Zonaprop: delay fijo y parse (como 3_main); evita timeout cuando hay captcha o respuesta lenta
+            # Zonaprop: delay fijo + CAPTCHA poll
             if portal_name == "zonaprop":
                 time.sleep(ZONAPROP_INITIAL_DELAY)
             else:
@@ -288,41 +246,48 @@ def scrape_portal(
                         EC.presence_of_element_located((By.CSS_SELECTOR, first_card_sel))
                     )
                 except TimeoutException:
-                    logger.warning(f"    Timeout esperando cards en {url_inicial}")
-                    if progress_callback:
-                        progress_callback(f"    [TIMEOUT] {portal_name}: sin cards en {url_inicial[:60]}...")
+                    log(f"    [TIMEOUT] {portal_name}: sin cards en {url_inicial[:60]}...")
                     continue
                 except WebDriverException as e:
-                    logger.error(f"    Error de driver: {e}")
-                    if progress_callback:
-                        progress_callback(f"    [ERROR] {portal_name}: {e}")
+                    log(f"    [ERROR] {portal_name}: {e}")
                     continue
 
             current_page = 1
             while current_page <= max_pages:
-                log(f"    Página {current_page}...")
+                log(f"    Pagina {current_page}...")
                 html = driver.page_source
                 items = parser_func(html)
-                # Zonaprop: un retry si primera página con 0 cards (puede ser lentitud o captcha)
+
+                # Zonaprop: retry + CAPTCHA poll
                 if portal_name == "zonaprop" and current_page == 1 and not items:
                     time.sleep(ZONAPROP_RETRY_DELAY)
                     html = driver.page_source
                     items = parser_func(html)
+
                 if not items and current_page == 1 and portal_name == "zonaprop":
-                    logger.warning(
-                        "Zonaprop: 0 cards tras delay+retry. Posible captcha. Titulo: %s",
-                        driver.title,
-                    )
-                    logger.debug(
-                        "Zonaprop HTML snippet: %s",
-                        (driver.page_source or "")[:500],
-                    )
-                    if progress_callback:
-                        progress_callback(
-                            "    [ZONAPROP] Posible captcha o bloqueo. Sin cards tras esperar. "
-                            "Podés usar Brave en el host (scripts/start_browser_for_scraper_visible.bat) para este portal."
-                        )
-                    break
+                    if _page_looks_like_captcha(driver):
+                        log("    [CAPTCHA] Detectado en Zonaprop. Resolvelo en la ventana del navegador...")
+                        captcha_start = time.time()
+                        resolved = False
+                        while time.time() - captcha_start < CAPTCHA_TIMEOUT:
+                            time.sleep(CAPTCHA_POLL_INTERVAL)
+                            if not _page_looks_like_captcha(driver):
+                                log("    [CAPTCHA] Resuelto! Continuando...")
+                                driver.get(url_inicial)
+                                time.sleep(ZONAPROP_INITIAL_DELAY)
+                                html = driver.page_source
+                                items = parser_func(html)
+                                resolved = True
+                                break
+                        if not resolved:
+                            log("    [CAPTCHA] Timeout (2 min). Salteando esta combinacion.")
+                            break
+                        if not items:
+                            log("    [ZONAPROP] 0 cards tras resolver captcha. Salteando.")
+                            break
+                    else:
+                        log("    [ZONAPROP] 0 cards tras delay+retry. Posible bloqueo.")
+                        break
 
                 new_count = 0
                 for item in items:
@@ -353,7 +318,7 @@ def scrape_portal(
                     log("      Sin novedades — cortando")
                     break
 
-                # Paginación con WebDriverWait en lugar de sleep(5)
+                # Paginacion
                 try:
                     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                     first_card = driver.find_elements(By.CSS_SELECTOR, first_card_sel)
@@ -364,11 +329,9 @@ def scrape_portal(
                         break
 
                     driver.execute_script("arguments[0].click();", next_btns[0])
-                    # Zonaprop: delay tras click (como 3_main) para que cargue la siguiente página
                     if portal_name == "zonaprop":
                         time.sleep(5)
                     if first_card_ref:
-                        # Esperar que el primer card viejo desaparezca (página nueva cargada)
                         WebDriverWait(driver, 15).until(
                             EC.staleness_of(first_card_ref)
                         )
@@ -384,17 +347,16 @@ def scrape_portal(
     return portal_data
 
 
+# ---------------------------------------------------------------------------
+# Pipeline: scrape only (stores JSON staging, does NOT write to departamentos)
+# ---------------------------------------------------------------------------
+
 def run_scraping_pipeline(
     run_id: int,
     perfil_id: int,
     portales: list[str],
     config: dict,
 ) -> None:
-    """
-    Pipeline completo de scraping para un perfil.
-    Se ejecuta como BackgroundTask en un thread separado (es sincrónico).
-    Actualiza scrape_run en la base de datos directamente via sesión sync.
-    """
     from app.database import SyncSessionLocal
     from app.models.scrape_run import ScrapeRun
     from sqlalchemy import select
@@ -406,23 +368,21 @@ def run_scraping_pipeline(
                 run.progress_log = (run.progress_log or "") + line + "\n"
                 db.commit()
 
-    logger.info(f"[run={run_id}] Iniciando pipeline para perfil_id={perfil_id}")
-    _append_progress(f"[run={run_id}] Iniciando pipeline para perfil_id={perfil_id}")
+    logger.info(f"[run={run_id}] Iniciando scraping para perfil_id={perfil_id}")
+    _append_progress(f"[run={run_id}] Iniciando scraping para perfil_id={perfil_id}")
 
     with SyncSessionLocal() as db:
         run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one_or_none()
         if not run:
             logger.error(f"ScrapeRun {run_id} no encontrado")
             return
-        run.status = "running"
+        run.status = "scraping"
         run.started_at = datetime.utcnow()
         db.commit()
 
     urls_data = build_all_urls(config)
     driver = None
-    total_scraped = 0
-    total_inserted = 0
-    total_updated = 0
+    all_items: list[dict] = []
     total_filtered = 0
 
     try:
@@ -437,37 +397,24 @@ def run_scraping_pipeline(
                 driver, portal_name, urls_data, config,
                 progress_callback=_append_progress,
             )
-            total_scraped += len(items)
+            all_items.extend(items)
 
-            if items:
-                inserted, updated = upsert_items_sync(
-                    items=items,
-                    perfil_id=perfil_id,
-                    run_id=run_id,
-                )
-                total_inserted += inserted
-                total_updated += updated
-
-        # Marcar como inactivas propiedades no vistas en este run
-        _mark_inactive(perfil_id)
+        # Save to staging JSON (NOT to departamentos)
+        save_staging(run_id, all_items)
+        _append_progress(f"Scraping finalizado. {len(all_items)} items guardados en staging.")
 
         with SyncSessionLocal() as db:
             run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one()
-            run.status = "completed"
+            run.status = "scraped"
             run.finished_at = datetime.utcnow()
-            run.total_scraped = total_scraped
-            run.total_inserted = total_inserted
-            run.total_updated = total_updated
+            run.total_scraped = len(all_items)
             run.total_filtered = total_filtered
             db.commit()
 
-        logger.info(
-            f"[run={run_id}] Completado: scraped={total_scraped} "
-            f"inserted={total_inserted} updated={total_updated}"
-        )
+        logger.info(f"[run={run_id}] Scraping completado: {len(all_items)} items en staging")
 
     except Exception as e:
-        logger.exception(f"[run={run_id}] Error en pipeline: {e}")
+        logger.exception(f"[run={run_id}] Error en scraping: {e}")
         with SyncSessionLocal() as db:
             run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one_or_none()
             if run:
@@ -478,15 +425,16 @@ def run_scraping_pipeline(
     finally:
         if driver:
             try:
-                # No cerrar el navegador del host cuando usamos SCRAPER_BROWSER_URL (queda para el próximo scrape)
-                if not os.environ.get("SCRAPER_BROWSER_URL", "").strip():
-                    driver.quit()
+                driver.quit()
             except Exception:
                 pass
 
 
+# ---------------------------------------------------------------------------
+# Mark inactive (called at commit time, after metrics)
+# ---------------------------------------------------------------------------
+
 def _mark_inactive(perfil_id: int) -> None:
-    """Marca como inactivas las propiedades no vistas en el scrape de hoy."""
     from app.database import SyncSessionLocal
     from app.models.departamento import Departamento
     from sqlalchemy import update

@@ -5,16 +5,11 @@
 # ─── Credenciales y datos sensibles ────────────────────────────────────────────
 perfiles/configuraciones.json
 
-# ─── Datos generados (no commitear) ────────────────────────────────────────────
-perfiles/*/zonaprop/
-perfiles/*/argenprop/
-perfiles/*/cabaprop/
-perfiles/*/departamentos_master.xlsx
-perfiles/*/departamentos_enriquecido.xlsx
-perfiles/*/departamentos_enriquecido.geojson
-perfiles/*/departamentos.geojson
-perfiles/*/ranking.xlsx
-perfiles/global/
+# ─── Archivos legacy (referencia) ─────────────────────────────────────────────
+VIEJOS/
+
+# ─── Staging de scraping (datos temporales) ───────────────────────────────────
+staging/
 
 # ─── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
@@ -48,9 +43,7 @@ env/
 *.swo
 .DS_Store
 Thumbs.db
+.claude
 
 # ─── Docker ────────────────────────────────────────────────────────────────────
 docker-compose.override.yml
-
-# ─── Salidas legacy ────────────────────────────────────────────────────────────
-outputs/

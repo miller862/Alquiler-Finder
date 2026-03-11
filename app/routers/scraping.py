@@ -11,20 +11,17 @@ from app.schemas.scrape_run import ScrapeRunCreate, ScrapeRunRead
 
 router = APIRouter(prefix="/api/scraping", tags=["scraping"])
 
-# Umbral: runs en pending/running más antiguos que esto se marcan como failed
-STALE_MINUTES = 5
+# Full pipeline (scrape + captcha wait + geocode + metrics) can take 20+ min
+STALE_MINUTES = 30
 
 
 async def mark_stale_runs(db: AsyncSession) -> None:
-    """
-    Marca como failed los runs que llevan más de STALE_MINUTES en pending/running.
-    Llamar antes de cualquier select de runs para tener estado consistente.
-    """
     threshold = datetime.utcnow() - timedelta(minutes=STALE_MINUTES)
+    # Only mark truly stuck runs (scraping/geocoding/computing_metrics are active states)
     await db.execute(
         update(ScrapeRun)
         .where(
-            ScrapeRun.status.in_(["pending", "running"]),
+            ScrapeRun.status.in_(["pending", "scraping", "geocoding", "computing_metrics"]),
             or_(
                 ScrapeRun.started_at < threshold,
                 and_(ScrapeRun.started_at.is_(None), ScrapeRun.created_at < threshold),
@@ -56,13 +53,12 @@ async def trigger_scraping(
     if not perfil:
         raise HTTPException(status_code=404, detail="Perfil no encontrado")
 
-    # Limpiar runs obsoletos antes de verificar si hay uno en curso
     await mark_stale_runs(db)
 
     running_result = await db.execute(
         select(ScrapeRun).where(
             ScrapeRun.perfil_id == data.perfil_id,
-            ScrapeRun.status.in_(["pending", "running"]),
+            ScrapeRun.status.in_(["pending", "scraping", "geocoding", "computing_metrics"]),
         )
     )
     if running_result.scalar_one_or_none():
@@ -84,7 +80,7 @@ async def trigger_scraping(
     config = perfil.to_config_dict()
 
     background_tasks.add_task(
-        _run_in_thread,
+        _run_scraping_in_thread,
         run_id=run.id,
         perfil_id=data.perfil_id,
         portales=data.portales,
@@ -94,16 +90,9 @@ async def trigger_scraping(
     return run
 
 
-def _run_in_thread(run_id: int, perfil_id: int, portales: list[str], config: dict) -> None:
-    """Wrapper para ejecutar el pipeline sincrónico en un thread."""
+def _run_scraping_in_thread(run_id: int, perfil_id: int, portales: list[str], config: dict) -> None:
     from app.services.scraping_service import run_scraping_pipeline
-
-    run_scraping_pipeline(
-        run_id=run_id,
-        perfil_id=perfil_id,
-        portales=portales,
-        config=config,
-    )
+    run_scraping_pipeline(run_id=run_id, perfil_id=perfil_id, portales=portales, config=config)
 
 
 @router.get("/runs", response_model=list[ScrapeRunRead])
@@ -132,23 +121,17 @@ async def list_runs(
     return result.scalars().all()
 
 
-# PATCH antes de GET /{run_id} para evitar conflictos de matching
 @router.patch("/runs/{run_id}/interrupt", response_model=ScrapeRunRead)
 async def interrupt_run(
     run_id: int,
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Marca un run como failed (interrumpido). Solo admin.
-    Idempotente: si el run ya está en failed o completed, devuelve 200 sin error.
-    """
     result = await db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id))
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Run no encontrado")
 
-    # Idempotente: si ya terminó, no hacer nada
     if run.status in ("failed", "completed"):
         return run
 
@@ -172,6 +155,137 @@ async def get_run(
     return run
 
 
+# ---------------------------------------------------------------------------
+# Per-run geocode (operates on staging JSON)
+# ---------------------------------------------------------------------------
+
+@router.post("/runs/{run_id}/geocode", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_run_geocode(
+    run_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Geocodifica items del staging de un run. Solo admin."""
+    from app.config import settings
+
+    if not settings.google_maps_api_key:
+        raise HTTPException(status_code=400, detail="GOOGLE_MAPS_API_KEY no configurada en .env")
+
+    result = await db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run no encontrado")
+    if run.status != "scraped":
+        raise HTTPException(status_code=400, detail=f"Run debe estar en estado 'scraped', esta en '{run.status}'")
+
+    run.status = "geocoding"
+    await db.commit()
+
+    background_tasks.add_task(
+        _run_geocode_in_thread,
+        run_id=run_id,
+        api_key=settings.google_maps_api_key,
+    )
+    return {"message": "Geocodificacion iniciada"}
+
+
+def _run_geocode_in_thread(run_id: int, api_key: str) -> None:
+    from app.database import SyncSessionLocal
+    from app.models.scrape_run import ScrapeRun
+    from app.services.consolidation_service import geocode_run_items
+    from sqlalchemy import select
+    from datetime import datetime
+
+    def _append_progress(line: str) -> None:
+        with SyncSessionLocal() as db:
+            run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one_or_none()
+            if run:
+                run.progress_log = (run.progress_log or "") + line + "\n"
+                db.commit()
+
+    try:
+        count = geocode_run_items(run_id, api_key, progress_callback=_append_progress)
+        with SyncSessionLocal() as db:
+            run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one()
+            run.status = "geocoded"
+            db.commit()
+    except Exception as e:
+        with SyncSessionLocal() as db:
+            run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one_or_none()
+            if run:
+                run.status = "failed"
+                run.error_message = f"Error en geocodificacion: {e}"
+                run.progress_log = (run.progress_log or "") + f"[ERROR] {e}\n"
+                db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Per-run metrics + commit (operates on staging JSON, then writes to DB)
+# ---------------------------------------------------------------------------
+
+@router.post("/runs/{run_id}/metrics", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_run_metrics(
+    run_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Calcula metricas y commitea a la base de datos. Solo admin."""
+    result = await db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run no encontrado")
+    if run.status != "geocoded":
+        raise HTTPException(status_code=400, detail=f"Run debe estar en estado 'geocoded', esta en '{run.status}'")
+
+    run.status = "computing_metrics"
+    await db.commit()
+
+    background_tasks.add_task(
+        _run_metrics_in_thread,
+        run_id=run_id,
+        perfil_id=run.perfil_id,
+    )
+    return {"message": "Calculo de metricas iniciado"}
+
+
+def _run_metrics_in_thread(run_id: int, perfil_id: int) -> None:
+    from app.database import SyncSessionLocal
+    from app.models.scrape_run import ScrapeRun
+    from app.services.metrics_service import compute_metrics_and_commit
+    from sqlalchemy import select
+    from datetime import datetime
+
+    def _append_progress(line: str) -> None:
+        with SyncSessionLocal() as db:
+            run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one_or_none()
+            if run:
+                run.progress_log = (run.progress_log or "") + line + "\n"
+                db.commit()
+
+    try:
+        count = compute_metrics_and_commit(run_id, perfil_id, progress_callback=_append_progress)
+        with SyncSessionLocal() as db:
+            run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one()
+            run.status = "completed"
+            run.finished_at = datetime.utcnow()
+            run.total_inserted = count  # approximate — actual insert/update split is in the log
+            db.commit()
+    except Exception as e:
+        with SyncSessionLocal() as db:
+            run = db.execute(select(ScrapeRun).where(ScrapeRun.id == run_id)).scalar_one_or_none()
+            if run:
+                run.status = "failed"
+                run.error_message = f"Error en metricas/commit: {e}"
+                run.progress_log = (run.progress_log or "") + f"[ERROR] {e}\n"
+                db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Legacy per-perfil endpoints (manual fallback for re-processing existing DB data)
+# ---------------------------------------------------------------------------
+
 @router.post("/geocode/{perfil_id}", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_geocoding(
     perfil_id: int,
@@ -179,15 +293,12 @@ async def trigger_geocoding(
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dispara la geocodificación de propiedades sin coordenadas. Solo admin."""
+    """Geocodifica propiedades sin coordenadas directamente en la DB. Solo admin."""
     from app.config import settings
     from app.services.consolidation_service import geocodificar_pendientes_sync
 
     if not settings.google_maps_api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="GOOGLE_MAPS_API_KEY no configurada en .env",
-        )
+        raise HTTPException(status_code=400, detail="GOOGLE_MAPS_API_KEY no configurada en .env")
 
     background_tasks.add_task(
         geocodificar_pendientes_sync,
@@ -204,7 +315,7 @@ async def trigger_metrics(
     current_user: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dispara el cálculo de métricas de distancia y scoring para un perfil. Solo admin."""
+    """Recalcula metricas directamente sobre datos en la DB. Solo admin."""
     from app.services.metrics_service import compute_metrics_for_perfil
 
     background_tasks.add_task(compute_metrics_for_perfil, perfil_id=perfil_id)

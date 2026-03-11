@@ -4,7 +4,11 @@
 
 {% block extra_style %}
 .run-status-pending { color: #6c7293; }
-.run-status-running { color: #fdae61; }
+.run-status-scraping { color: #fdae61; }
+.run-status-scraped { color: #74b9ff; }
+.run-status-geocoding { color: #fdae61; }
+.run-status-geocoded { color: #a29bfe; }
+.run-status-computing_metrics { color: #fdae61; }
 .run-status-completed { color: #1a9641; }
 .run-status-failed { color: #d73027; }
 .table-dark-custom { --bs-table-bg: #1a1d27; --bs-table-striped-bg: #1e2235; --bs-table-border-color: #2d3148; color: #e0e0e0; font-size: .84rem; }
@@ -14,6 +18,8 @@
 .op-status.running { background: rgba(253,174,97,.12); border: 1px solid rgba(253,174,97,.3); color: #fdae61; }
 .op-status.done { background: rgba(26,150,65,.12); border: 1px solid rgba(26,150,65,.3); color: #1a9641; }
 .op-status.error { background: rgba(215,48,39,.12); border: 1px solid rgba(215,48,39,.3); color: #d73027; }
+.op-status.captcha { background: rgba(255,165,0,.15); border: 1px solid rgba(255,165,0,.4); color: #ffa500; }
+.btn-action-sm { font-size: .72rem; padding: .18rem .5rem; }
 {% endblock %}
 
 {% block content %}
@@ -57,29 +63,8 @@
           <div id="scrapeStatus"></div>
           <div class="mt-3" id="scrapeLogPanel" style="display:none;">
             <label class="form-label text-secondary" style="font-size:.75rem;">Log en vivo</label>
-            <pre id="scrapeLog" class="p-3 rounded mb-0" style="background:#0f1117;border:1px solid #2d3148;color:#b0b7d4;font-size:.75rem;max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></pre>
+            <pre id="scrapeLog" class="p-3 rounded mb-0" style="background:#0f1117;border:1px solid #2d3148;color:#b0b7d4;font-size:.75rem;max-height:350px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></pre>
           </div>
-        </div>
-      </div>
-
-      <!-- Geocodificacion y metricas -->
-      <div class="card mt-3">
-        <div class="card-header"><strong>Geocodificacion y metricas</strong></div>
-        <div class="card-body">
-          <div class="mb-2">
-            <select id="geoPerfil" class="form-select form-select-sm mb-2">
-              {% for p in perfiles %}
-              <option value="{{ p.id }}">{{ p.nombre }}</option>
-              {% endfor %}
-            </select>
-            <button class="btn btn-outline-secondary btn-sm me-2" id="btnGeocode">
-              <i class="bi bi-geo-alt"></i> Geocodificar pendientes
-            </button>
-            <button class="btn btn-outline-secondary btn-sm" id="btnMetrics">
-              <i class="bi bi-calculator"></i> Calcular metricas
-            </button>
-          </div>
-          <div id="geoStatus"></div>
         </div>
       </div>
     </div>
@@ -98,25 +83,11 @@
             <thead>
               <tr>
                 <th>#</th><th>Perfil</th><th>Estado</th><th>Portales</th>
-                <th>Scraped</th><th>Nuevos</th><th>Actualizados</th><th>Inicio</th>
-                <th></th>
+                <th>Scraped</th><th>Inicio</th>
+                <th>Acciones</th>
               </tr>
             </thead>
-            <tbody id="runsBody">
-              {% for run in runs %}
-              <tr>
-                <td>{{ run.id }}</td>
-                <td>{{ run.perfil_id or '—' }}</td>
-                <td class="run-status-{{ run.status }}"><strong>{{ run.status }}</strong></td>
-                <td style="font-size:.75rem;">{{ ', '.join(run.portales) }}</td>
-                <td>{{ run.total_scraped }}</td>
-                <td>{{ run.total_inserted }}</td>
-                <td>{{ run.total_updated }}</td>
-                <td style="font-size:.75rem;">{{ run.started_at.strftime('%d/%m %H:%M') if run.started_at else '—' }}</td>
-                <td>{% if run.status in ('pending', 'running') %}<button type="button" class="btn btn-outline-secondary btn-sm run-interrupt" data-run-id="{{ run.id }}">Interrumpir</button>{% endif %}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
+            <tbody id="runsBody"></tbody>
           </table>
         </div>
       </div>
@@ -126,9 +97,9 @@
 
 <script>
 // --- State ---
-let scrapePolling = null;
-let geoRunning = false;
-let metricsRunning = false;
+let polling = null;
+let activeRunId = null;
+const ACTIVE_STATUSES = ['pending', 'scraping', 'geocoding', 'computing_metrics'];
 
 // --- Helpers ---
 function setButtonLoading(btn, loading, originalHTML) {
@@ -142,6 +113,19 @@ function setButtonLoading(btn, loading, originalHTML) {
 
 function showStatus(containerId, type, message) {
   document.getElementById(containerId).innerHTML = '<div class="op-status ' + type + '">' + message + '</div>';
+}
+
+function isActive(status) {
+  return ACTIVE_STATUSES.includes(status);
+}
+
+function statusLabel(s) {
+  const map = {
+    pending: 'Pendiente', scraping: 'Scrapeando', scraped: 'Scrapeado',
+    geocoding: 'Geocodificando', geocoded: 'Geocodificado',
+    computing_metrics: 'Metricas', completed: 'Completado', failed: 'Fallido'
+  };
+  return map[s] || s;
 }
 
 // --- Scraping ---
@@ -163,12 +147,13 @@ async function iniciarScraping() {
 
     if (resp.ok) {
       const data = await resp.json();
+      activeRunId = data.id;
       showStatus('scrapeStatus', 'running',
-        '<span class="spinner-border spinner-border-sm me-1"></span> Run #' + data.id + ' en curso. Scrapeando ' + portales.join(', ') + '...');
+        '<span class="spinner-border spinner-border-sm me-1"></span> Run #' + data.id + ' en curso...');
       startPolling();
     } else if (resp.status === 409) {
       showStatus('scrapeStatus', 'running',
-        '<span class="spinner-border spinner-border-sm me-1"></span> Ya hay un scraping en curso para este perfil.');
+        '<span class="spinner-border spinner-border-sm me-1"></span> Ya hay un proceso en curso.');
       startPolling();
     } else {
       const err = await resp.json();
@@ -181,112 +166,174 @@ async function iniciarScraping() {
   }
 }
 
+// --- Per-run actions ---
+async function triggerRunGeocode(runId) {
+  activeRunId = runId;
+  showStatus('scrapeStatus', 'running',
+    '<span class="spinner-border spinner-border-sm me-1"></span> Geocodificando run #' + runId + '...');
+  startPolling();
+
+  try {
+    const resp = await fetch('/api/scraping/runs/' + runId + '/geocode', {method: 'POST', credentials: 'include'});
+    if (!resp.ok) {
+      const err = await resp.json();
+      showStatus('scrapeStatus', 'error', 'Error: ' + err.detail);
+      stopPolling();
+    }
+  } catch (e) {
+    showStatus('scrapeStatus', 'error', 'Error de conexion: ' + e.message);
+    stopPolling();
+  }
+}
+
+async function triggerRunMetrics(runId) {
+  activeRunId = runId;
+  showStatus('scrapeStatus', 'running',
+    '<span class="spinner-border spinner-border-sm me-1"></span> Calculando metricas run #' + runId + '...');
+  startPolling();
+
+  try {
+    const resp = await fetch('/api/scraping/runs/' + runId + '/metrics', {method: 'POST', credentials: 'include'});
+    if (!resp.ok) {
+      const err = await resp.json();
+      showStatus('scrapeStatus', 'error', 'Error: ' + err.detail);
+      stopPolling();
+    }
+  } catch (e) {
+    showStatus('scrapeStatus', 'error', 'Error de conexion: ' + e.message);
+    stopPolling();
+  }
+}
+
+// --- Polling ---
 function startPolling() {
-  if (scrapePolling) clearInterval(scrapePolling);
+  if (polling) clearInterval(polling);
   document.getElementById('scrapeLogPanel').style.display = 'block';
-  const pollInterval = 1500;
+  const pollInterval = 2000;
+
   function poll() {
     fetch('/api/scraping/runs', {credentials: 'include'})
       .then(r => r.json())
       .then(runs => {
         renderRuns(runs);
-        const runningRun = runs.find(r => r.status === 'pending' || r.status === 'running');
-        const latest = runs[0];
-        const runToShow = runningRun || latest;
+
+        // Find the run to show logs for
+        const runningRun = runs.find(r => isActive(r.status));
+        const runToShow = runningRun || (activeRunId ? runs.find(r => r.id === activeRunId) : runs[0]);
+
         const logEl = document.getElementById('scrapeLog');
         if (runToShow) {
           const logText = runToShow.progress_log && runToShow.progress_log.trim()
             ? runToShow.progress_log
-            : (runToShow.status === 'running' || runToShow.status === 'pending'
-              ? 'Esperando logs...'
-              : 'Sin logs para este run.');
+            : (isActive(runToShow.status) ? 'Esperando logs...' : 'Sin logs para este run.');
           logEl.textContent = logText;
           logEl.scrollTop = logEl.scrollHeight;
+
+          // CAPTCHA highlight
+          if (logText.includes('[CAPTCHA]')) {
+            showStatus('scrapeStatus', 'captcha',
+              '⚠️ CAPTCHA detectado. Resolvelo en la ventana del navegador.');
+          }
         }
-        const anyRunning = runs.some(r => r.status === 'pending' || r.status === 'running');
-        if (!anyRunning) {
-          clearInterval(scrapePolling);
-          scrapePolling = null;
+
+        const anyActive = runs.some(r => isActive(r.status));
+        if (!anyActive) {
+          stopPolling();
           const btn = document.getElementById('btnIniciarScraping');
           btn.disabled = false;
           btn.innerHTML = '<i class="bi bi-play-fill"></i> Iniciar Scraping';
 
-          if (latest && latest.status === 'completed') {
-            showStatus('scrapeStatus', 'done',
-              'Scraping completado. ' + latest.total_scraped + ' encontrados, ' + latest.total_inserted + ' nuevos, ' + latest.total_updated + ' actualizados.');
-          } else if (latest && latest.status === 'failed') {
-            showStatus('scrapeStatus', 'error',
-              'Scraping fallido: ' + (latest.error_message || 'Error desconocido'));
+          const latest = activeRunId ? runs.find(r => r.id === activeRunId) : runs[0];
+          if (latest) {
+            if (latest.status === 'completed') {
+              showStatus('scrapeStatus', 'done',
+                'Pipeline completado. Datos disponibles en mapa, ranking y estadisticas.');
+            } else if (latest.status === 'scraped') {
+              showStatus('scrapeStatus', 'done',
+                'Scraping completado (' + latest.total_scraped + ' items). Usa "Geocodificar" para continuar.');
+            } else if (latest.status === 'geocoded') {
+              showStatus('scrapeStatus', 'done',
+                'Geocodificacion completada. Usa "Metricas" para finalizar.');
+            } else if (latest.status === 'failed') {
+              showStatus('scrapeStatus', 'error',
+                'Fallido: ' + (latest.error_message || 'Error desconocido'));
+            }
           }
         }
       });
   }
   poll();
-  scrapePolling = setInterval(poll, pollInterval);
+  polling = setInterval(poll, pollInterval);
+}
+
+function stopPolling() {
+  if (polling) { clearInterval(polling); polling = null; }
 }
 
 // --- Runs table ---
 function renderRuns(runs) {
+  const anyActive = runs.some(r => isActive(r.status));
   const body = document.getElementById('runsBody');
   body.innerHTML = runs.map(r => {
     const started = r.started_at ? new Date(r.started_at).toLocaleString('es-AR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
-    const statusIcon = (r.status === 'running' || r.status === 'pending')
+    const statusIcon = isActive(r.status)
       ? '<span class="spinner-border spinner-border-sm me-1"></span>' : '';
-    const interruptBtn = (r.status === 'running' || r.status === 'pending')
-      ? '<button type="button" class="btn btn-outline-secondary btn-sm run-interrupt" data-run-id="' + r.id + '">Interrumpir</button>' : '';
+
+    // Action buttons based on status
+    let actions = '';
+    if (isActive(r.status)) {
+      actions = '<button type="button" class="btn btn-outline-secondary btn-action-sm run-interrupt" data-run-id="' + r.id + '">Interrumpir</button>';
+    } else if (r.status === 'scraped' && !anyActive) {
+      actions = '<button type="button" class="btn btn-outline-info btn-action-sm run-geocode" data-run-id="' + r.id + '"><i class="bi bi-geo-alt"></i> Geocodificar</button>';
+    } else if (r.status === 'geocoded' && !anyActive) {
+      actions = '<button type="button" class="btn btn-outline-warning btn-action-sm run-metrics" data-run-id="' + r.id + '"><i class="bi bi-calculator"></i> Metricas</button>';
+    } else if (r.status === 'completed') {
+      actions = '<span class="text-success" style="font-size:.8rem;"><i class="bi bi-check-circle-fill"></i></span>';
+    } else if (r.status === 'failed') {
+      actions = '<span class="text-danger" style="font-size:.8rem;" title="' + (r.error_message || '') + '"><i class="bi bi-x-circle-fill"></i></span>';
+    }
+
     return '<tr>' +
       '<td>' + r.id + '</td>' +
       '<td>' + (r.perfil_id || '—') + '</td>' +
-      '<td class="run-status-' + r.status + '">' + statusIcon + '<strong>' + r.status + '</strong></td>' +
+      '<td class="run-status-' + r.status + '">' + statusIcon + '<strong>' + statusLabel(r.status) + '</strong></td>' +
       '<td style="font-size:.75rem;">' + (r.portales || []).join(', ') + '</td>' +
       '<td>' + (r.total_scraped ?? '') + '</td>' +
-      '<td>' + (r.total_inserted ?? '') + '</td>' +
-      '<td>' + (r.total_updated ?? '') + '</td>' +
       '<td style="font-size:.75rem;">' + started + '</td>' +
-      '<td>' + interruptBtn + '</td>' +
+      '<td>' + actions + '</td>' +
     '</tr>';
   }).join('');
+
+  // Bind action buttons
   body.querySelectorAll('.run-interrupt').forEach(btn => {
     btn.addEventListener('click', () => interruptRun(parseInt(btn.dataset.runId)));
+  });
+  body.querySelectorAll('.run-geocode').forEach(btn => {
+    btn.addEventListener('click', () => triggerRunGeocode(parseInt(btn.dataset.runId)));
+  });
+  body.querySelectorAll('.run-metrics').forEach(btn => {
+    btn.addEventListener('click', () => triggerRunMetrics(parseInt(btn.dataset.runId)));
   });
 }
 
 async function interruptRun(runId) {
-  const id = parseInt(runId, 10);
-  if (isNaN(id)) {
-    showStatus('scrapeStatus', 'error', 'ID de run inválido. Actualizá la página.');
-    return;
-  }
   try {
-    const resp = await fetch('/api/scraping/runs/' + id + '/interrupt', { method: 'PATCH', credentials: 'include' });
+    const resp = await fetch('/api/scraping/runs/' + runId + '/interrupt', { method: 'PATCH', credentials: 'include' });
     if (resp.ok) {
+      stopPolling();
       const runs = await fetch('/api/scraping/runs', { credentials: 'include' }).then(r => r.json());
       renderRuns(runs);
-      document.getElementById('scrapeLog').textContent = 'Run #' + id + ' marcado como interrumpido.';
+      document.getElementById('scrapeLog').textContent = 'Run #' + runId + ' interrumpido.';
       const btn = document.getElementById('btnIniciarScraping');
       btn.disabled = false;
       btn.innerHTML = '<i class="bi bi-play-fill"></i> Iniciar Scraping';
-      showStatus('scrapeStatus', 'done', 'Run #' + id + ' marcado como interrumpido.');
-      if (scrapePolling) { clearInterval(scrapePolling); scrapePolling = null; }
-    } else if (resp.status === 404) {
-      showStatus('scrapeStatus', 'error', 'Run no encontrado. Actualizá la página (el servidor puede haber reiniciado con código nuevo).');
-      // Refrescar la tabla de todas formas, puede que ya haya sido marcado como failed por el servidor
+      showStatus('scrapeStatus', 'done', 'Run #' + runId + ' interrumpido.');
+    } else {
       const runs = await fetch('/api/scraping/runs', { credentials: 'include' }).then(r => r.json());
       renderRuns(runs);
-      const anyRunning = runs.some(r => r.status === 'pending' || r.status === 'running');
-      if (!anyRunning) {
-        const btn = document.getElementById('btnIniciarScraping');
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-play-fill"></i> Iniciar Scraping';
-        if (scrapePolling) { clearInterval(scrapePolling); scrapePolling = null; }
-      }
-    } else {
-      let detail = 'No se pudo interrumpir';
-      try { const err = await resp.json(); detail = err.detail || detail; } catch {}
-      showStatus('scrapeStatus', 'error', 'Error ' + resp.status + ': ' + detail);
     }
   } catch (e) {
-    showStatus('scrapeStatus', 'error', 'Error de conexión: ' + e.message);
+    showStatus('scrapeStatus', 'error', 'Error: ' + e.message);
   }
 }
 
@@ -296,92 +343,26 @@ async function cargarRuns() {
   renderRuns(runs);
 }
 
-// --- Geocode ---
-async function triggerGeocode() {
-  if (geoRunning) return;
-  geoRunning = true;
-  const btn = document.getElementById('btnGeocode');
-  const originalHTML = btn.innerHTML;
-  setButtonLoading(btn, true, originalHTML);
-  showStatus('geoStatus', 'running',
-    '<span class="spinner-border spinner-border-sm me-1"></span> Geocodificando propiedades pendientes...');
-
-  try {
-    const perfilId = document.getElementById('geoPerfil').value;
-    const resp = await fetch('/api/scraping/geocode/' + perfilId, {method:'POST', credentials:'include'});
-    if (resp.ok) {
-      showStatus('geoStatus', 'running',
-        '<span class="spinner-border spinner-border-sm me-1"></span> Geocodificando en segundo plano. Puede tardar unos minutos...');
-      setTimeout(() => {
-        showStatus('geoStatus', 'done', 'Geocodificacion finalizada (verificar en el mapa).');
-        setButtonLoading(btn, false, originalHTML);
-        geoRunning = false;
-      }, 3000);
-    } else {
-      const err = await resp.json();
-      showStatus('geoStatus', 'error', 'Error: ' + err.detail);
-      setButtonLoading(btn, false, originalHTML);
-      geoRunning = false;
-    }
-  } catch (e) {
-    showStatus('geoStatus', 'error', 'Error de conexion: ' + e.message);
-    setButtonLoading(btn, false, originalHTML);
-    geoRunning = false;
-  }
-}
-
-// --- Metrics ---
-async function triggerMetrics() {
-  if (metricsRunning) return;
-  metricsRunning = true;
-  const btn = document.getElementById('btnMetrics');
-  const originalHTML = btn.innerHTML;
-  setButtonLoading(btn, true, originalHTML);
-  showStatus('geoStatus', 'running',
-    '<span class="spinner-border spinner-border-sm me-1"></span> Calculando metricas de distancia y scoring...');
-
-  try {
-    const perfilId = document.getElementById('geoPerfil').value;
-    const resp = await fetch('/api/scraping/metrics/' + perfilId, {method:'POST', credentials:'include'});
-    if (resp.ok) {
-      showStatus('geoStatus', 'running',
-        '<span class="spinner-border spinner-border-sm me-1"></span> Metricas calculandose en segundo plano. Puede tardar unos minutos...');
-      setTimeout(() => {
-        showStatus('geoStatus', 'done', 'Metricas calculadas. Datos disponibles en mapa, ranking y estadisticas.');
-        setButtonLoading(btn, false, originalHTML);
-        metricsRunning = false;
-      }, 3000);
-    } else {
-      const err = await resp.json();
-      showStatus('geoStatus', 'error', 'Error: ' + err.detail);
-      setButtonLoading(btn, false, originalHTML);
-      metricsRunning = false;
-    }
-  } catch (e) {
-    showStatus('geoStatus', 'error', 'Error de conexion: ' + e.message);
-    setButtonLoading(btn, false, originalHTML);
-    metricsRunning = false;
-  }
-}
-
-// --- Check for running jobs on page load ---
+// --- Check for active jobs on page load ---
 async function checkRunningOnLoad() {
   const resp = await fetch('/api/scraping/runs', {credentials: 'include'});
   const runs = await resp.json();
-  const anyRunning = runs.some(r => r.status === 'pending' || r.status === 'running');
-  if (anyRunning) {
+  renderRuns(runs);
+
+  const activeRun = runs.find(r => isActive(r.status));
+  if (activeRun) {
+    activeRunId = activeRun.id;
     document.getElementById('scrapeLogPanel').style.display = 'block';
-    const runningRun = runs.find(r => r.status === 'pending' || r.status === 'running');
-    if (runningRun && runningRun.progress_log) {
+    if (activeRun.progress_log) {
       const el = document.getElementById('scrapeLog');
-      el.textContent = runningRun.progress_log;
+      el.textContent = activeRun.progress_log;
       el.scrollTop = el.scrollHeight;
     }
     const btn = document.getElementById('btnIniciarScraping');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Scraping en curso...';
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Proceso en curso...';
     showStatus('scrapeStatus', 'running',
-      '<span class="spinner-border spinner-border-sm me-1"></span> Hay un scraping en curso. Esperando finalizacion...');
+      '<span class="spinner-border spinner-border-sm me-1"></span> Proceso en curso...');
     startPolling();
   }
 }
@@ -389,8 +370,6 @@ async function checkRunningOnLoad() {
 // --- Event listeners ---
 document.getElementById('btnIniciarScraping').addEventListener('click', iniciarScraping);
 document.getElementById('btnRefreshRuns').addEventListener('click', cargarRuns);
-document.getElementById('btnGeocode').addEventListener('click', triggerGeocode);
-document.getElementById('btnMetrics').addEventListener('click', triggerMetrics);
 
 checkRunningOnLoad();
 </script>
