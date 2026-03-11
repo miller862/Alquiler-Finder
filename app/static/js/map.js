@@ -79,13 +79,15 @@ function buildPopup(p) {
 }
 
 // ---- Cargar capas base ----
+const LAYER_CHECKBOX_IDS = { barrios: 'layBarrios', ev: 'layEV', subte: 'laySubte', gyms: 'layGyms' };
+
 async function loadBaseLayer(key, url, styleFn, labelFn) {
   try {
     const resp = await fetch(url);
     const gj = await resp.json();
     const layer = L.geoJSON(gj, { style: styleFn, onEachFeature: labelFn });
     layers[key] = layer;
-    if (document.getElementById(`lay${key.charAt(0).toUpperCase()+key.slice(1)}`)?.checked) {
+    if (document.getElementById(LAYER_CHECKBOX_IDS[key])?.checked) {
       layer.addTo(map);
     }
   } catch(e) { console.warn(`Error cargando capa ${key}:`, e); }
@@ -115,20 +117,20 @@ async function initBaseLayers() {
     ]);
     const subteGroup = L.layerGroup();
     L.geoJSON(lineas, {
-      style: f => ({
-        color: COLOR_SUBTE[f.properties?.LINEA] || '#aaa',
-        weight: 3, opacity: 0.8,
-      }),
+      style: f => {
+        const letra = (f.properties?.LINEASUB || '').replace('LINEA ', '').trim();
+        return { color: COLOR_SUBTE[letra] || '#aaa', weight: 3, opacity: 0.8 };
+      },
     }).addTo(subteGroup);
     L.geoJSON(estaciones, {
       pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-        radius: 4, fillColor: COLOR_SUBTE[f.properties?.LINEA] || '#aaa',
+        radius: 4, fillColor: COLOR_SUBTE[f.properties?.linea] || '#aaa',
         color: '#fff', weight: 1, fillOpacity: 0.9,
       }),
-      onEachFeature: (f, layer) => layer.bindTooltip(f.properties?.ESTACION || '', { sticky: true }),
+      onEachFeature: (f, layer) => layer.bindTooltip(f.properties?.estacion || '', { sticky: true }),
     }).addTo(subteGroup);
     layers['subte'] = subteGroup;
-    if (document.getElementById('laySubte')?.checked) subteGroup.addTo(map);
+    if (document.getElementById(LAYER_CHECKBOX_IDS['subte'])?.checked) subteGroup.addTo(map);
   } catch(e) { console.warn('Error cargando subte:', e); }
 
   // Gyms
@@ -137,14 +139,14 @@ async function initBaseLayers() {
     layers['gyms'] = L.geoJSON(gj, {
       pointToLayer: (f, latlng) => L.circleMarker(latlng, {
         radius: 5,
-        fillColor: COLOR_GYMS[f.properties?.marca] || '#888',
+        fillColor: f.properties?.color_map || COLOR_GYMS[f.properties?.cadena] || '#888',
         color: '#fff', weight: 1, fillOpacity: 0.85,
       }),
       onEachFeature: (f, layer) => layer.bindTooltip(
-        `${f.properties?.marca || 'Gym'}: ${f.properties?.nombre || ''}`, { sticky: true }
+        `${f.properties?.cadena || 'Gym'}: ${f.properties?.nombre || ''}`, { sticky: true }
       ),
     });
-    if (document.getElementById('layGyms')?.checked) layers['gyms'].addTo(map);
+    if (document.getElementById(LAYER_CHECKBOX_IDS['gyms'])?.checked) layers['gyms'].addTo(map);
   } catch(e) { console.warn('Error cargando gyms:', e); }
 }
 

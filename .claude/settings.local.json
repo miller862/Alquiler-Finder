@@ -8,7 +8,8 @@
       "Bash(docker ps --format \"table {{.Names}}\\\\t{{.Status}}\\\\t{{.Ports}}\")",
       "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"SELECT 1 AS test;\")",
       "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"SELECT count\\(*\\) FROM users;\")",
-      "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"SELECT id, username, is_admin, hashed_password FROM users;\")"
+      "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"SELECT id, username, is_admin, hashed_password FROM users;\")",
+      "Bash(docker exec deptos_scraper-db-1 psql -U deptos -d deptos_scraper -c \"DELETE FROM alembic_version; INSERT INTO alembic_version \\(version_num\\) VALUES \\(''0001_baseline''\\);\")"
     ]
   }
 }

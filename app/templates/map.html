@@ -24,18 +24,20 @@
 
   <!-- Sidebar de filtros -->
   <div class="sidebar" style="width: 280px; flex-shrink: 0;">
+    {% if user.is_admin %}
     <div class="sidebar-section">
-      <div class="sidebar-title">Perfil</div>
+      <div class="sidebar-title">Ver departamentos de</div>
       <select id="selPerfil" class="form-select form-select-sm">
-        <option value="">-- Todos mis perfiles --</option>
-        {% for p in perfiles %}
+        <option value="global">Todos los usuarios</option>
+        {% for p in all_perfiles %}
         <option value="{{ p.id }}">{{ p.nombre }}</option>
         {% endfor %}
-        {% if user.is_admin %}
-        <option value="global">🌐 Vista global</option>
-        {% endif %}
       </select>
     </div>
+    {% else %}
+    {# Usuario normal: su perfil se carga automaticamente #}
+    <input type="hidden" id="selPerfil" value="{{ perfil.id if perfil else '' }}">
+    {% endif %}
 
     <div class="sidebar-section">
       <div class="sidebar-title">Estado</div>

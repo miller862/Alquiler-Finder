@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+
+{% block title %}Mi Perfil — Deptos Scraper{% endblock %}
+
+{% block extra_style %}
+.param-label { color: #7c8cf8; font-size: .75rem; text-transform: uppercase; letter-spacing: .5px; margin-bottom: .25rem; }
+.param-value { font-size: .9rem; margin-bottom: .75rem; }
+.tag { display: inline-block; background: #2d3148; color: #b0b7d4; padding: 2px 8px; border-radius: 4px; font-size: .8rem; margin: 2px; }
+{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 700px;">
+  <h4 class="mb-4"><i class="bi bi-sliders"></i> Mi Perfil de Busqueda</h4>
+
+  {% if perfil %}
+  <!-- Vista de parametros actuales -->
+  <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <strong>{{ perfil.nombre }}</strong>
+      <button class="btn btn-sm btn-outline-primary" id="btnEditar">
+        <i class="bi bi-pencil"></i> Editar
+      </button>
+    </div>
+    <div class="card-body" id="viewMode">
+      <div class="row">
+        <div class="col-6">
+          <div class="param-label">Operacion</div>
+          <div class="param-value">{{ perfil.operacion }}</div>
+        </div>
+        <div class="col-6">
+          <div class="param-label">Moneda</div>
+          <div class="param-value">{{ perfil.precio_moneda }}</div>
+        </div>
+      </div>
+
+      <div class="param-label">Barrios</div>
+      <div class="param-value">
+        {% for b in perfil.barrios %}<span class="tag">{{ b }}</span>{% endfor %}
+        {% if not perfil.barrios %}<span class="text-secondary">Sin barrios</span>{% endif %}
+      </div>
+
+      <div class="param-label">Tipos</div>
+      <div class="param-value">
+        {% for t in perfil.tipos %}<span class="tag">{{ t }}</span>{% endfor %}
+        {% if not perfil.tipos %}<span class="text-secondary">Sin tipos</span>{% endif %}
+      </div>
+
+      <div class="row">
+        <div class="col-6">
+          <div class="param-label">Precio</div>
+          <div class="param-value">
+            {% if perfil.precio_min or perfil.precio_max %}
+              ${{ "{:,}".format(perfil.precio_min or 0) }} — ${{ "{:,}".format(perfil.precio_max or 0) }}
+            {% else %}<span class="text-secondary">Sin limites</span>{% endif %}
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="param-label">Expensas max</div>
+          <div class="param-value">
+            {% if perfil.expensas_max %}${{ "{:,}".format(perfil.expensas_max) }}{% else %}<span class="text-secondary">Sin limite</span>{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-4">
+          <div class="param-label">Ambientes</div>
+          <div class="param-value">{{ perfil.amb_min or '—' }} a {{ perfil.amb_max or '—' }}</div>
+        </div>
+        <div class="col-4">
+          <div class="param-label">Dormitorios</div>
+          <div class="param-value">{{ perfil.dorm_min or '—' }} a {{ perfil.dorm_max or '—' }}</div>
+        </div>
+        <div class="col-4">
+          <div class="param-label">Sup. cubierta min</div>
+          <div class="param-value">{% if perfil.superficie_cubierta_min %}{{ perfil.superficie_cubierta_min }} m2{% else %}<span class="text-secondary">—</span>{% endif %}</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-6">
+          <div class="param-label">Balcon</div>
+          <div class="param-value">{{ "Si" if perfil.balcon else "No requerido" }}</div>
+        </div>
+      </div>
+
+      <div class="param-label">Filtros de exclusion</div>
+      <div class="param-value">
+        {% for f in perfil.filtros_exclusion %}<span class="tag" style="background:#3d2020;">{{ f }}</span>{% endfor %}
+        {% if not perfil.filtros_exclusion %}<span class="text-secondary">Sin filtros</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Formulario de edicion (oculto por defecto) -->
+  <div class="card mb-3" id="editMode" style="display:none;">
+    <div class="card-header"><strong>Editar parametros</strong></div>
+    <div class="card-body">
+      <form id="perfilForm">
+        <div class="mb-3">
+          <label class="form-label">Nombre del perfil</label>
+          <input type="text" class="form-control form-control-sm" id="fNombre" value="{{ perfil.nombre }}" readonly>
+        </div>
+        <div class="row mb-3">
+          <div class="col-6">
+            <label class="form-label">Operacion</label>
+            <select class="form-select form-select-sm" id="fOperacion">
+              <option value="alquiler" {{ "selected" if perfil.operacion == "alquiler" }}>Alquiler</option>
+              <option value="venta" {{ "selected" if perfil.operacion == "venta" }}>Venta</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Moneda</label>
+            <select class="form-select form-select-sm" id="fMoneda">
+              <option value="pesos" {{ "selected" if perfil.precio_moneda == "pesos" }}>Pesos</option>
+              <option value="dolares" {{ "selected" if perfil.precio_moneda == "dolares" }}>Dolares</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Barrios (separados por coma)</label>
+          <input type="text" class="form-control form-control-sm" id="fBarrios" value="{{ perfil.barrios | join(', ') }}">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Tipos (separados por coma)</label>
+          <input type="text" class="form-control form-control-sm" id="fTipos" value="{{ perfil.tipos | join(', ') }}">
+        </div>
+        <div class="row mb-3">
+          <div class="col-4">
+            <label class="form-label">Precio min</label>
+            <input type="number" class="form-control form-control-sm" id="fPrecioMin" value="{{ perfil.precio_min or '' }}">
+          </div>
+          <div class="col-4">
+            <label class="form-label">Precio max</label>
+            <input type="number" class="form-control form-control-sm" id="fPrecioMax" value="{{ perfil.precio_max or '' }}">
+          </div>
+          <div class="col-4">
+            <label class="form-label">Expensas max</label>
+            <input type="number" class="form-control form-control-sm" id="fExpensasMax" value="{{ perfil.expensas_max or '' }}">
+          </div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-3">
+            <label class="form-label">Amb min</label>
+            <input type="number" class="form-control form-control-sm" id="fAmbMin" value="{{ perfil.amb_min or '' }}">
+          </div>
+          <div class="col-3">
+            <label class="form-label">Amb max</label>
+            <input type="number" class="form-control form-control-sm" id="fAmbMax" value="{{ perfil.amb_max or '' }}">
+          </div>
+          <div class="col-3">
+            <label class="form-label">Dorm min</label>
+            <input type="number" class="form-control form-control-sm" id="fDormMin" value="{{ perfil.dorm_min or '' }}">
+          </div>
+          <div class="col-3">
+            <label class="form-label">Dorm max</label>
+            <input type="number" class="form-control form-control-sm" id="fDormMax" value="{{ perfil.dorm_max or '' }}">
+          </div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-6">
+            <label class="form-label">Sup. cubierta min (m2)</label>
+            <input type="number" class="form-control form-control-sm" id="fSupMin" value="{{ perfil.superficie_cubierta_min or '' }}">
+          </div>
+          <div class="col-6">
+            <div class="form-check mt-4">
+              <input class="form-check-input" type="checkbox" id="fBalcon" {{ "checked" if perfil.balcon }}>
+              <label class="form-check-label" for="fBalcon">Requiere balcon</label>
+            </div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Filtros de exclusion (separados por coma)</label>
+          <input type="text" class="form-control form-control-sm" id="fFiltros" value="{{ perfil.filtros_exclusion | join(', ') }}">
+        </div>
+        <div class="d-flex gap-2">
+          <button type="submit" class="btn btn-primary btn-sm">Guardar</button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="btnCancelar">Cancelar</button>
+        </div>
+        <div id="editMsg" class="mt-2" style="font-size:.85rem;"></div>
+      </form>
+    </div>
+  </div>
+
+  {% else %}
+  <!-- Sin perfil: formulario de creacion -->
+  <div class="card">
+    <div class="card-header"><strong>Crear perfil de busqueda</strong></div>
+    <div class="card-body">
+      <p class="text-secondary">Aun no tenes un perfil de busqueda configurado. Crealo para empezar a scrapear.</p>
+      <form id="createForm">
+        <div class="mb-3">
+          <label class="form-label">Nombre del perfil</label>
+          <input type="text" class="form-control form-control-sm" id="cNombre" value="{{ user.username | upper }}" required>
+        </div>
+        <div class="row mb-3">
+          <div class="col-6">
+            <label class="form-label">Operacion</label>
+            <select class="form-select form-select-sm" id="cOperacion">
+              <option value="alquiler" selected>Alquiler</option>
+              <option value="venta">Venta</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Moneda</label>
+            <select class="form-select form-select-sm" id="cMoneda">
+              <option value="pesos" selected>Pesos</option>
+              <option value="dolares">Dolares</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Barrios (separados por coma)</label>
+          <input type="text" class="form-control form-control-sm" id="cBarrios" placeholder="belgrano, palermo, recoleta">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Tipos (separados por coma)</label>
+          <input type="text" class="form-control form-control-sm" id="cTipos" value="departamento, ph">
+        </div>
+        <div class="row mb-3">
+          <div class="col-4">
+            <label class="form-label">Precio min</label>
+            <input type="number" class="form-control form-control-sm" id="cPrecioMin">
+          </div>
+          <div class="col-4">
+            <label class="form-label">Precio max</label>
+            <input type="number" class="form-control form-control-sm" id="cPrecioMax">
+          </div>
+          <div class="col-4">
+            <label class="form-label">Expensas max</label>
+            <input type="number" class="form-control form-control-sm" id="cExpensasMax">
+          </div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-3">
+            <label class="form-label">Amb min</label>
+            <input type="number" class="form-control form-control-sm" id="cAmbMin">
+          </div>
+          <div class="col-3">
+            <label class="form-label">Amb max</label>
+            <input type="number" class="form-control form-control-sm" id="cAmbMax">
+          </div>
+          <div class="col-3">
+            <label class="form-label">Dorm min</label>
+            <input type="number" class="form-control form-control-sm" id="cDormMin">
+          </div>
+          <div class="col-3">
+            <label class="form-label">Dorm max</label>
+            <input type="number" class="form-control form-control-sm" id="cDormMax">
+          </div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-6">
+            <label class="form-label">Sup. cubierta min (m2)</label>
+            <input type="number" class="form-control form-control-sm" id="cSupMin">
+          </div>
+          <div class="col-6">
+            <div class="form-check mt-4">
+              <input class="form-check-input" type="checkbox" id="cBalcon">
+              <label class="form-check-label" for="cBalcon">Requiere balcon</label>
+            </div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Filtros de exclusion (separados por coma)</label>
+          <input type="text" class="form-control form-control-sm" id="cFiltros" placeholder="monoambiente, mono ambiente">
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Crear perfil</button>
+        <div id="createMsg" class="mt-2" style="font-size:.85rem;"></div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+function parseList(val) {
+  return val.split(',').map(s => s.trim()).filter(Boolean);
+}
+function intOrNull(val) {
+  const n = parseInt(val);
+  return isNaN(n) ? null : n;
+}
+
+{% if perfil %}
+// Editar perfil existente
+const perfilId = {{ perfil.id }};
+document.getElementById('btnEditar').addEventListener('click', () => {
+  document.getElementById('viewMode').style.display = 'none';
+  document.getElementById('editMode').style.display = '';
+  document.querySelector('.card-header .btn').style.display = 'none';
+});
+document.getElementById('btnCancelar').addEventListener('click', () => {
+  document.getElementById('viewMode').style.display = '';
+  document.getElementById('editMode').style.display = 'none';
+  document.querySelector('.card-header .btn').style.display = '';
+});
+document.getElementById('perfilForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    nombre: document.getElementById('fNombre').value,
+    operacion: document.getElementById('fOperacion').value,
+    precio_moneda: document.getElementById('fMoneda').value,
+    barrios: parseList(document.getElementById('fBarrios').value),
+    tipos: parseList(document.getElementById('fTipos').value),
+    precio_min: intOrNull(document.getElementById('fPrecioMin').value),
+    precio_max: intOrNull(document.getElementById('fPrecioMax').value),
+    expensas_max: intOrNull(document.getElementById('fExpensasMax').value),
+    amb_min: intOrNull(document.getElementById('fAmbMin').value),
+    amb_max: intOrNull(document.getElementById('fAmbMax').value),
+    dorm_min: intOrNull(document.getElementById('fDormMin').value),
+    dorm_max: intOrNull(document.getElementById('fDormMax').value),
+    superficie_cubierta_min: intOrNull(document.getElementById('fSupMin').value),
+    balcon: document.getElementById('fBalcon').checked,
+    filtros_exclusion: parseList(document.getElementById('fFiltros').value),
+  };
+  const resp = await fetch(`/api/perfiles/${perfilId}`, {
+    method: 'PUT', credentials: 'include',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const msg = document.getElementById('editMsg');
+  if (resp.ok) {
+    msg.innerHTML = '<span style="color:#1a9641;">Guardado. Recargando...</span>';
+    setTimeout(() => location.reload(), 800);
+  } else {
+    const err = await resp.json();
+    msg.innerHTML = `<span style="color:#d73027;">Error: ${err.detail || 'Error desconocido'}</span>`;
+  }
+});
+{% else %}
+// Crear perfil nuevo
+document.getElementById('createForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    nombre: document.getElementById('cNombre').value,
+    operacion: document.getElementById('cOperacion').value,
+    precio_moneda: document.getElementById('cMoneda').value,
+    barrios: parseList(document.getElementById('cBarrios').value),
+    tipos: parseList(document.getElementById('cTipos').value),
+    precio_min: intOrNull(document.getElementById('cPrecioMin').value),
+    precio_max: intOrNull(document.getElementById('cPrecioMax').value),
+    expensas_max: intOrNull(document.getElementById('cExpensasMax').value),
+    amb_min: intOrNull(document.getElementById('cAmbMin').value),
+    amb_max: intOrNull(document.getElementById('cAmbMax').value),
+    dorm_min: intOrNull(document.getElementById('cDormMin').value),
+    dorm_max: intOrNull(document.getElementById('cDormMax').value),
+    superficie_cubierta_min: intOrNull(document.getElementById('cSupMin').value),
+    balcon: document.getElementById('cBalcon').checked,
+    filtros_exclusion: parseList(document.getElementById('cFiltros').value),
+  };
+  const resp = await fetch('/api/perfiles/', {
+    method: 'POST', credentials: 'include',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const msg = document.getElementById('createMsg');
+  if (resp.ok) {
+    msg.innerHTML = '<span style="color:#1a9641;">Perfil creado. Recargando...</span>';
+    setTimeout(() => location.reload(), 800);
+  } else {
+    const err = await resp.json();
+    msg.innerHTML = `<span style="color:#d73027;">Error: ${err.detail || 'Error desconocido'}</span>`;
+  }
+});
+{% endif %}
+</script>
+{% endblock %}

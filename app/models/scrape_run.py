@@ -37,6 +37,8 @@ class ScrapeRun(Base):
 
     error_message: Mapped[Optional[str]] = mapped_column(Text)
 
+    progress_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     started_at: Mapped[Optional[datetime]] = mapped_column()
     finished_at: Mapped[Optional[datetime]] = mapped_column()
 

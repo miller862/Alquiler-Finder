@@ -18,6 +18,7 @@ class ScrapeRunRead(BaseModel):
     total_updated: int
     total_filtered: int
     error_message: Optional[str]
+    progress_log: Optional[str] = None
     started_at: Optional[datetime]
     finished_at: Optional[datetime]
     created_at: datetime

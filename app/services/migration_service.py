@@ -54,7 +54,10 @@ def migrate_users_and_perfiles(db) -> dict[str, int]:
             logger.warning(f"Config sin usuario, saltando: {nombre}")
             continue
 
-        # Upsert usuario
+        if cfg.get("es_global"):
+            continue  # global no es un perfil de búsqueda
+
+        # Upsert usuario — si ya existe, no tocar su password
         existing_user = db.execute(
             select(User).where(User.username == username)
         ).scalar_one_or_none()
@@ -71,9 +74,6 @@ def migrate_users_and_perfiles(db) -> dict[str, int]:
             db.add(user)
             db.flush()
             logger.info(f"  Usuario creado: {username}")
-
-        if cfg.get("es_global"):
-            continue  # global no es un perfil de búsqueda
 
         # Crear perfil
         existing_perfil = db.execute(
@@ -185,7 +185,20 @@ def migrate_departamentos_from_excel(db, perfil_id_map: dict[str, int]) -> int:
 
         logger.info(f"  Migrando {nombre} desde {xlsx_path.name}...")
         df = pd.read_excel(xlsx_path)
-        logger.info(f"  {len(df)} registros encontrados")
+        logger.info(f"  {len(df)} registros encontrados en Excel")
+
+        # Filtrar: excluir filas con REVISION que indique baja/descartado
+        if "REVISION" in df.columns:
+            baja_keywords = ["baja", "descartado", "eliminado"]
+            mask = df["REVISION"].apply(
+                lambda v: isinstance(v, str) and v.strip().lower() in baja_keywords
+            )
+            n_excluidos = mask.sum()
+            if n_excluidos > 0:
+                df = df[~mask]
+                logger.info(f"  {n_excluidos} registros excluidos por REVISION (baja/descartado)")
+
+        logger.info(f"  {len(df)} registros a migrar")
 
         for _, row in df.iterrows():
             portal = str(row.get("Portal", "")).lower()

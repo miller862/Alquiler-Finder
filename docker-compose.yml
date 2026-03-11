@@ -17,6 +17,11 @@ services:
       retries: 10
 
   app:
+    # NOTA: con DEBUG=false uvicorn NO hace hot-reload.
+    # Tras cambios en código Python (routers, services, models) hay que reiniciar el contenedor:
+    #   docker-compose restart app   (rápido, sin rebuild)
+    #   docker-compose up --build -d (si también cambiaste Dockerfile o requirements.txt)
+    # Los cambios en app/templates y app/static se reflejan con F5 gracias al volumen montado.
     build: .
     restart: unless-stopped
     environment:
@@ -24,16 +29,26 @@ services:
       SYNC_DATABASE_URL: postgresql+psycopg2://deptos:${POSTGRES_PASSWORD:-deptos_dev}@db:5432/deptos_scraper
       SECRET_KEY: ${SECRET_KEY:-changeme-set-a-real-secret-in-env}
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-manuel}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       DEBUG: "false"
       DOCKER_ENV: "true"
       SHAPES_DIR: /app/shapes
+      # Navegador en el host para Zonaprop (sin captcha). Ejecutá scripts/start_browser_for_scraper.bat en el host;
+      # si no está corriendo, el scraper usa Chromium en Docker igual.
+      SCRAPER_BROWSER_URL: host.docker.internal:9222
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
     volumes:
+      - ./app:/app/app:ro
+      - ./migrations:/app/migrations:ro
+      - ./scripts:/app/scripts:ro
       - ./shapes:/app/shapes:ro
+      - ./perfiles:/app/perfiles:ro
+      - ./seed:/app/seed
 
 volumes:
   postgres_data:

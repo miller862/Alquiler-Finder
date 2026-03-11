@@ -40,14 +40,14 @@
     <thead>
       <tr>
         <th>Revisión</th>
-        <th>Fecha detec.</th>
+        <th class="sortable" data-col="fecha_deteccion">Fecha detec. ▲▼</th>
         <th class="sortable" data-col="score">Score ▲▼</th>
         <th>Portal</th>
         <th>Barrio</th>
         <th>Dirección</th>
         <th class="sortable" data-col="precio">Precio ▲▼</th>
         <th>Expensas</th>
-        <th>Costo total</th>
+        <th class="sortable" data-col="costo_total">Costo total ▲▼</th>
         <th>Amb</th>
         <th>Dorm</th>
         <th>M² cub</th>
@@ -144,8 +144,17 @@ function renderTabla() {
 
   // Ordenar
   data.sort((a, b) => {
-    const va = a.properties[sortCol] ?? -Infinity;
-    const vb = b.properties[sortCol] ?? -Infinity;
+    let va = a.properties[sortCol] ?? null;
+    let vb = b.properties[sortCol] ?? null;
+    // Dates come as strings (YYYY-MM-DD), compare lexicographically
+    if (sortCol === 'fecha_deteccion') {
+      va = va || '';
+      vb = vb || '';
+      const cmp = va.localeCompare(vb);
+      return sortAsc ? cmp : -cmp;
+    }
+    va = va ?? -Infinity;
+    vb = vb ?? -Infinity;
     return sortAsc ? va - vb : vb - va;
   });
 

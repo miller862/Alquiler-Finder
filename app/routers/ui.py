@@ -7,12 +7,29 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
-from app.dependencies import get_db, get_optional_user, get_current_user
+from app.dependencies import get_db, get_optional_user, get_current_user, get_current_admin
 from app.models.perfil import Perfil
+from app.models.user import User
 from app.models.scrape_run import ScrapeRun
 
 router = APIRouter(tags=["ui"])
 templates = Jinja2Templates(directory="app/templates")
+
+
+async def _get_user_perfil(db, user):
+    """Obtiene el unico perfil activo del usuario (1 user = 1 perfil)."""
+    result = await db.execute(
+        select(Perfil).where(Perfil.user_id == user.id, Perfil.is_active == True)
+    )
+    return result.scalars().first()
+
+
+async def _get_all_perfiles(db):
+    """Admin: obtiene todos los perfiles activos."""
+    result = await db.execute(
+        select(Perfil).where(Perfil.is_active == True)
+    )
+    return result.scalars().all()
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -33,21 +50,16 @@ async def map_page(
     db=Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    # Cargar perfiles del usuario para el selector del sidebar
-    result = await db.execute(
-        select(Perfil).where(
-            Perfil.user_id == current_user.id if not current_user.is_admin else True,
-            Perfil.is_active == True,
-        )
-    )
-    perfiles = result.scalars().all()
+    perfil = await _get_user_perfil(db, current_user)
+    all_perfiles = await _get_all_perfiles(db) if current_user.is_admin else []
 
     return templates.TemplateResponse(
         "map.html",
         {
             "request": request,
             "user": current_user,
-            "perfiles": perfiles,
+            "perfil": perfil,
+            "all_perfiles": all_perfiles,
             "active_page": "map",
         },
     )
@@ -59,20 +71,16 @@ async def ranking_page(
     db=Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Perfil).where(
-            Perfil.user_id == current_user.id if not current_user.is_admin else True,
-            Perfil.is_active == True,
-        )
-    )
-    perfiles = result.scalars().all()
+    perfil = await _get_user_perfil(db, current_user)
+    all_perfiles = await _get_all_perfiles(db) if current_user.is_admin else []
 
     return templates.TemplateResponse(
         "ranking.html",
         {
             "request": request,
             "user": current_user,
-            "perfiles": perfiles,
+            "perfil": perfil,
+            "all_perfiles": all_perfiles,
             "active_page": "ranking",
         },
     )
@@ -84,21 +92,36 @@ async def stats_page(
     db=Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Perfil).where(
-            Perfil.user_id == current_user.id if not current_user.is_admin else True,
-            Perfil.is_active == True,
-        )
-    )
-    perfiles = result.scalars().all()
+    perfil = await _get_user_perfil(db, current_user)
+    all_perfiles = await _get_all_perfiles(db) if current_user.is_admin else []
 
     return templates.TemplateResponse(
         "stats.html",
         {
             "request": request,
             "user": current_user,
-            "perfiles": perfiles,
+            "perfil": perfil,
+            "all_perfiles": all_perfiles,
             "active_page": "stats",
+        },
+    )
+
+
+@router.get("/mi-perfil", response_class=HTMLResponse)
+async def mi_perfil_page(
+    request: Request,
+    db=Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    perfil = await _get_user_perfil(db, current_user)
+
+    return templates.TemplateResponse(
+        "mi_perfil.html",
+        {
+            "request": request,
+            "user": current_user,
+            "perfil": perfil,
+            "active_page": "mi-perfil",
         },
     )
 
@@ -107,19 +130,15 @@ async def stats_page(
 async def scraping_panel(
     request: Request,
     db=Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ):
     from sqlalchemy import desc
-    from app.dependencies import get_current_admin
+    from app.routers.scraping import mark_stale_runs
 
-    # Cargar perfiles y últimos runs
-    result_perfiles = await db.execute(
-        select(Perfil).where(
-            Perfil.user_id == current_user.id if not current_user.is_admin else True,
-            Perfil.is_active == True,
-        )
-    )
-    perfiles = result_perfiles.scalars().all()
+    all_perfiles = await _get_all_perfiles(db)
+
+    # Limpiar runs obsoletos antes de renderizar el HTML para que no aparezcan como "running"
+    await mark_stale_runs(db)
 
     result_runs = await db.execute(
         select(ScrapeRun).order_by(desc(ScrapeRun.created_at)).limit(20)
@@ -131,7 +150,7 @@ async def scraping_panel(
         {
             "request": request,
             "user": current_user,
-            "perfiles": perfiles,
+            "perfiles": all_perfiles,
             "runs": runs,
             "active_page": "scraping",
         },

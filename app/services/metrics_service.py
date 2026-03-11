@@ -174,9 +174,9 @@ def compute_metrics_for_perfil(perfil_id: int) -> int:
             res_cant.append(len(d_en_red))
 
         df[f"distancia_m_{label}"] = (
-            pd.to_numeric(res_dist, errors="coerce").apply(np.floor).astype("Int64")
+            pd.Series(res_dist).apply(lambda x: int(np.floor(x)) if pd.notna(x) else pd.NA).astype("Int64")
         )
-        df[f"cant_{label}"] = pd.to_numeric(res_cant, errors="coerce").fillna(0).astype(int)
+        df[f"cant_{label}"] = pd.Series(res_cant).fillna(0).astype(int)
 
     # --- Capas por polígono (parque, plaza) ---
     ev = shapes["ev"]
@@ -210,9 +210,9 @@ def compute_metrics_for_perfil(perfil_id: int) -> int:
             res_cant.append(len(d_en_red))
 
         df[f"distancia_m_{label}"] = (
-            pd.to_numeric(res_dist, errors="coerce").apply(np.floor).astype("Int64")
+            pd.Series(res_dist).apply(lambda x: int(np.floor(x)) if pd.notna(x) else pd.NA).astype("Int64")
         )
-        df[f"cant_{label}"] = pd.to_numeric(res_cant, errors="coerce").fillna(0).astype(int)
+        df[f"cant_{label}"] = pd.Series(res_cant).fillna(0).astype(int)
 
     # --- Spatial join para barrio_geo ---
     barrios = shapes["barrios"].copy()

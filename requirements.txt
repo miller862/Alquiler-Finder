@@ -19,6 +19,7 @@ pydantic-settings>=2.2.0
 # ─── Scraping ──────────────────────────────────────────────────────────────────
 selenium>=4.18.0
 beautifulsoup4>=4.12.3
+undetected-chromedriver>=3.5.0
 
 # ─── Procesamiento de datos ────────────────────────────────────────────────────
 pandas>=2.2.0
