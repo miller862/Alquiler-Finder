@@ -1,210 +1,151 @@
-# DEPTOS_SCRAPER — Scraper de departamentos en alquiler (CABA)
+# Deptos Scraper
 
-Sistema para scrapear, consolidar, geocodificar y visualizar departamentos en alquiler de Zonaprop, Argenprop y Cabaprop en CABA. Incluye métricas de proximidad a subte, gimnasios y espacios verdes, con una app Streamlit protegida por login.
+Aplicacion web para buscar, scrapear y analizar departamentos en alquiler de portales inmobiliarios de Buenos Aires (ZonaProp, ArgenProp, CabaProp). Incluye geocodificacion, metricas de proximidad (subte, espacios verdes, gimnasios), scoring y visualizacion en mapa interactivo.
 
----
+## Stack
+
+- **Backend:** FastAPI + SQLAlchemy 2.0 (async) + Alembic
+- **Base de datos:** PostgreSQL 16
+- **Scraping:** Scrapling (StealthyFetcher con bypass de Cloudflare para ZonaProp, Fetcher HTTP para otros portales)
+- **Frontend:** Jinja2 templates + Leaflet.js (mapa interactivo)
+- **Auth:** JWT en cookie HttpOnly (passlib + python-jose)
+- **Deploy:** Docker Compose
+
+## Requisitos previos
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado y corriendo
+- Una API Key de [Google Maps Platform](https://console.cloud.google.com/) con la Geocoding API habilitada
+
+## Setup
+
+### 1. Clonar el repositorio
+
+```bash
+git clone <url-del-repo>
+cd deptos_scraper
+```
+
+### 2. Crear archivo `.env`
+
+```bash
+cp .env.example .env
+```
+
+Editar `.env` con los siguientes valores:
+
+```env
+# Password de PostgreSQL (elegir la que quieras)
+POSTGRES_PASSWORD=tu_password_seguro
+
+# Clave secreta para JWT — generar con:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY=clave-secreta-generada
+
+# Credenciales del usuario admin
+ADMIN_USERNAME=tu_usuario
+ADMIN_PASSWORD=tu_password
+
+# API Key de Google Maps (para geocodificacion de direcciones)
+GOOGLE_MAPS_API_KEY=tu-api-key
+```
+
+### 3. Construir y levantar
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+Esto automaticamente:
+
+1. Levanta PostgreSQL 16
+2. Construye la imagen de la app (dependencias Python + Chromium para scraping)
+3. Corre las migraciones de base de datos (`alembic upgrade head`)
+4. Crea el usuario admin si `ADMIN_PASSWORD` esta configurado
+5. Carga datos iniciales desde `seed/` si la base esta vacia
+6. Inicia la app en **http://localhost:8000**
+
+### 4. Acceder
+
+Abrir http://localhost:8000 en el navegador y loguearse con las credenciales configuradas en `.env`.
+
+## Uso
+
+### Panel de scraping
+
+Acceder desde el menu de navegacion o directamente en `/admin/scraping`.
+
+El pipeline de scraping tiene 3 pasos secuenciales por cada run:
+
+1. **Scraping** — Boton "Iniciar Scraping": scrapea los portales seleccionados. Los datos se guardan temporalmente en un archivo JSON de staging (no se escribe a la base de datos todavia).
+2. **Geocodificacion** — Boton "Geocodificar" (aparece cuando el run esta en estado `scraped`): geocodifica las direcciones usando la API de Google Maps.
+3. **Metricas y commit** — Boton "Metricas" (aparece cuando el run esta en estado `geocoded`): calcula distancias a subtes, espacios verdes, gimnasios, genera el score de ranking y escribe todo a la base de datos.
+
+Cada paso muestra progreso en tiempo real en el panel de logs.
+
+### Mapa
+
+Mapa interactivo con Leaflet.js que muestra los departamentos geocodificados. Se puede filtrar por barrio, rango de precio y score.
+
+### Ranking
+
+Tabla con los departamentos ordenados por score, con links directos a las publicaciones.
+
+## Comandos utiles
+
+```bash
+# Ver logs en tiempo real
+docker compose logs -f app
+
+# Reiniciar la app sin rebuild (tras cambios en templates/static)
+docker compose restart app
+
+# Rebuild completo (tras cambios en Dockerfile o requirements.txt)
+docker compose up --build -d
+
+# Exportar un dump de datos (para compartir o hacer backup)
+docker compose exec app sh scripts/export_seed.sh
+
+# Conectarse a la base de datos
+docker compose exec db psql -U deptos deptos_scraper
+```
 
 ## Estructura del proyecto
 
 ```
-deptos_scraper/
-├── perfiles/                    # Datos por perfil (gitignored)
-│   ├── configuraciones.json     # Configs + usuario/password por perfil
-│   ├── MANUEL/                 # Ejemplo de perfil
-│   │   ├── zonaprop/           # CSVs por fecha
-│   │   ├── argenprop/
-│   │   ├── cabaprop/
-│   │   ├── departamentos_master.xlsx
-│   │   ├── departamentos.geojson
-│   │   ├── departamentos_enriquecido.xlsx
-│   │   ├── departamentos_enriquecido.geojson
-│   │   └── ranking.xlsx
-│   └── global/                 # Vista consolidada de todos los perfiles
-│       ├── departamentos_master_global.xlsx
-│       ├── departamentos_enriquecido_global.xlsx
-│       ├── departamentos_enriquecido_global.geojson
-│       └── ranking_global.xlsx
-├── shapes/                      # Capas base compartidas (barrios, subte, gimnasios, etc.)
-├── data/gimnasios/             # Fuentes para geocodificación de gimnasios
-├── scripts/
-│   ├── 0_parametros.py         # Constantes, configuraciones, rutas
-│   ├── 1_url_builder.py       # Construcción de URLs por portal
-│   ├── 2_parsers.py            # Parsers HTML
-│   ├── 3_main.py               # Scraper principal (Selenium)
-│   ├── 4_consolidar.py         # Consolidación, dedup, geocodificación
-│   ├── 5_auxiliar.py           # Colores, geocodificación gimnasios
-│   ├── 6_metrics_new.py        # Métricas y scoring
-│   ├── 7_visualize.py          # Mapa Folium por consola
-│   └── 8_streamlit_deploy.py   # App Streamlit con login
-├── configuraciones.ejemplo.json # Plantilla para perfiles
-├── Dockerfile
-├── requirements.txt
-└── README.md
+app/
+  main.py              # FastAPI app factory
+  config.py            # pydantic-settings (lee .env)
+  database.py          # SQLAlchemy async + sync engines
+  dependencies.py      # get_db, get_current_user
+  core/
+    security.py        # bcrypt + JWT
+    normalization.py   # deduplicacion de URLs y direcciones
+    constants.py       # barrios disponibles, pesos de scoring
+  models/              # SQLAlchemy ORM (User, Perfil, Departamento, ScrapeRun)
+  schemas/             # Pydantic v2
+  routers/             # auth, ui, departamentos, perfiles, scraping, shapes
+  services/            # scraping, parsers, url_builder, consolidation, metrics
+  templates/           # Jinja2 (login, mapa, ranking, admin_scraping)
+  static/              # JS, CSS
+migrations/            # Alembic
+shapes/                # GeoJSON (barrios, subtes, espacios verdes, gimnasios)
+seed/                  # Dump de datos iniciales (opcional)
 ```
 
----
+## Variables de entorno
 
-## Configuración inicial
+| Variable | Descripcion | Obligatoria |
+|----------|-------------|:-----------:|
+| `POSTGRES_PASSWORD` | Password de PostgreSQL | Si |
+| `SECRET_KEY` | Clave secreta para firmar tokens JWT | Si |
+| `ADMIN_USERNAME` | Username del admin (default: `manuel`) | No |
+| `ADMIN_PASSWORD` | Password del admin | Si |
+| `GOOGLE_MAPS_API_KEY` | API key de Google Maps para geocodificacion | Si |
+| `DEBUG` | `true` para hot-reload con uvicorn (default: `false`) | No |
 
-### 1. Crear la carpeta `perfiles/`
+## Notas
 
-Si clonás el repo, la carpeta `perfiles/` no se sube (está en `.gitignore`). Creala y copiá la plantilla:
-
-```bash
-mkdir perfiles
-copy configuraciones.ejemplo.json perfiles\configuraciones.json
-```
-
-**Nota**: Si migraste desde una versión anterior, las carpetas `data/` (excepto `data/gimnasios/`), `outputs/` y los archivos `shapes/departamentos_*.geojson` ya no se usan. Podés eliminarlos para evitar confusiones.
-
-### 2. Editar `perfiles/configuraciones.json`
-
-Cada perfil de búsqueda tiene:
-
-- **Campos de búsqueda**: `barrios`, `tipos`, `precio`, `ambientes`, etc.
-- **Usuario y contraseña**: para el login de la app Streamlit.
-
-El perfil `global` (con `es_global: true`) permite ver todos los datos consolidados; también requiere usuario y contraseña.
-
-Ejemplo mínimo:
-
-```json
-[
-  {
-    "nombre": "MI_PERFIL",
-    "operacion": "alquiler",
-    "barrios": ["belgrano", "palermo"],
-    "tipos": ["departamento"],
-    "precio": {"min": 400000, "max": 800000, "moneda": "pesos"},
-    "usuario": "mi_usuario",
-    "password": "mi_password"
-  },
-  {
-    "nombre": "global",
-    "es_global": true,
-    "usuario": "admin",
-    "password": "admin_password"
-  }
-]
-```
-
----
-
-## Workflow completo
-
-Los scripts se ejecutan **en orden** desde la raíz del proyecto. Ejecutá cada uno desde la carpeta del proyecto (o con `python scripts/X_nombre.py`).
-
-### Paso 1: Scraping (`3_main.py`)
-
-- Lee configuraciones de `perfiles/configuraciones.json`
-- Permite elegir un perfil existente o crear uno nuevo
-- Scrapea Zonaprop, Argenprop y Cabaprop con Selenium/Brave
-- Guarda CSVs en `perfiles/<perfil>/zonaprop/`, `argenprop/`, `cabaprop/`
-
-**Requisitos**: Brave instalado, ejecutar desde Windows (o adaptar rutas de Brave).
-
-```bash
-python scripts/3_main.py
-```
-
-### Paso 2: Consolidar (`4_consolidar.py`)
-
-- Elige un perfil
-- Lee los CSVs más recientes de cada portal
-- Deduplica por dirección/precio/tipo/ambientes
-- Geocodifica direcciones nuevas con Google Maps API
-- Guarda `departamentos_master.xlsx` y `departamentos.geojson` en `perfiles/<perfil>/`
-- Actualiza el master global en `perfiles/global/`
-
-**Requisitos**: API Key de Google Maps (se pide al geocodificar).
-
-```bash
-python scripts/4_consolidar.py
-```
-
-### Paso 3: Métricas (`6_metrics_new.py`)
-
-- Elige un perfil
-- Lee `perfiles/<perfil>/departamentos.geojson`
-- Calcula distancias a subte, gimnasios, espacios verdes
-- Genera Score ponderado
-- Guarda `departamentos_enriquecido.xlsx`, `.geojson` y `ranking.xlsx` en `perfiles/<perfil>/`
-- Actualiza automáticamente los archivos globales en `perfiles/global/`
-
-```bash
-python scripts/6_metrics_new.py
-```
-
-### Paso 4: Visualización
-
-**Opción A — Consola (Folium)**  
-`7_visualize.py` genera un mapa interactivo en el navegador.
-
-```bash
-python scripts/7_visualize.py
-```
-
-**Opción B — App Streamlit (recomendada)**  
-`8_streamlit_deploy.py` levanta una app con login.
-
-```bash
-streamlit run scripts/8_streamlit_deploy.py
-```
-
----
-
-## App Streamlit y login
-
-La app muestra primero una pantalla de login. Usuario y contraseña se definen en `perfiles/configuraciones.json`:
-
-- Cada perfil tiene `usuario` y `password`
-- El perfil `global` tiene su propio `usuario` y `password`
-- Cada usuario ve solo los datos de su perfil (o del global si corresponde)
-
-No hay selector de perfil: el perfil se determina por el usuario que inicia sesión.
-
----
-
-## Docker
-
-```bash
-docker build -t deptos-scraper .
-docker run -p 8501:8501 -v "%cd%\perfiles:/app/perfiles" deptos-scraper
-```
-
-**Importante**: Montá la carpeta `perfiles/` como volumen para que la app tenga acceso a configuraciones y datos. Sin ese volumen, la app no encontrará datos.
-
----
-
-## Dependencias adicionales (solo para pipeline de scraping)
-
-`requirements.txt` incluye lo necesario para la app Streamlit. Para ejecutar el pipeline completo (scripts 3, 4, 6):
-
-```bash
-pip install googlemaps selenium momepy networkx scipy beautifulsoup4 openpyxl
-```
-
----
-
-## Resumen del flujo de datos
-
-```
-configuraciones.json
-        │
-        ▼
-   [3_main] ──► perfiles/<perfil>/zonaprop|argenprop|cabaprop/*.csv
-        │
-        ▼
-   [4_consolidar] ──► perfiles/<perfil>/departamentos_master.xlsx
-                   ──► perfiles/<perfil>/departamentos.geojson
-                   ──► perfiles/global/departamentos_master_global.xlsx
-        │
-        ▼
-   [6_metrics_new] ──► perfiles/<perfil>/departamentos_enriquecido.*
-                    ──► perfiles/<perfil>/ranking.xlsx
-                    ──► perfiles/global/departamentos_enriquecido_global.*
-        │
-        ▼
-   [8_streamlit] ◄── Login (usuario/password de configuraciones)
-                 ◄── Carga datos del perfil del usuario
-```
+- Los cambios en `app/templates/` y `app/static/` se reflejan con F5 (estan montados como volumen).
+- Los cambios en codigo Python (routers, services, models) requieren `docker compose restart app`.
+- Los cambios en `Dockerfile` o `requirements.txt` requieren `docker compose up --build -d`.

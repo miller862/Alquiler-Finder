@@ -91,8 +91,28 @@ async def trigger_scraping(
 
 
 def _run_scraping_in_thread(run_id: int, perfil_id: int, portales: list[str], config: dict) -> None:
-    from app.services.scraping_service import run_scraping_pipeline
-    run_scraping_pipeline(run_id=run_id, perfil_id=perfil_id, portales=portales, config=config)
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from app.services.scraping_service import run_scraping_pipeline
+        run_scraping_pipeline(run_id=run_id, perfil_id=perfil_id, portales=portales, config=config)
+    except Exception as exc:
+        logger.exception(f"[run={run_id}] Fatal error in scraping thread")
+        from app.database import SyncSessionLocal
+        from app.models.scrape_run import ScrapeRun as _ScrapeRun
+        from sqlalchemy import select as _select
+        from datetime import datetime as _dt
+        try:
+            with SyncSessionLocal() as db:
+                run = db.execute(_select(_ScrapeRun).where(_ScrapeRun.id == run_id)).scalar_one_or_none()
+                if run and run.status not in ("failed", "completed"):
+                    run.status = "failed"
+                    run.error_message = str(exc)
+                    run.progress_log = (run.progress_log or "") + f"[FATAL] {exc}\n"
+                    run.finished_at = _dt.utcnow()
+                    db.commit()
+        except Exception:
+            logger.exception(f"[run={run_id}] Could not write failure to DB")
 
 
 @router.get("/runs", response_model=list[ScrapeRunRead])

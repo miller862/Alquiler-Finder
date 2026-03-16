@@ -17,8 +17,7 @@ python-jose[cryptography]>=3.3.0
 pydantic-settings>=2.2.0
 
 # ─── Scraping ──────────────────────────────────────────────────────────────────
-scrapling>=0.4
-camoufox>=0.4
+scrapling[fetchers]>=0.4
 beautifulsoup4>=4.12.3
 
 # ─── Procesamiento de datos ────────────────────────────────────────────────────
