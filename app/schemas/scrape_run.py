@@ -5,7 +5,7 @@ from typing import Optional
 
 class ScrapeRunCreate(BaseModel):
     perfil_id: int
-    portales: list[str] = ["zonaprop", "argenprop", "cabaprop"]
+    portales: list[str] = ["argenprop", "cabaprop"]
 
 
 class ScrapeRunRead(BaseModel):

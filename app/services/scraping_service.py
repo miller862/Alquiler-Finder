@@ -1,6 +1,5 @@
 """
 Motor de scraping con Scrapling.
-  - ZonaProp: StealthyFetcher (browser headless stealth, bypass automático de CAPTCHAs/Cloudflare)
   - ArgenProp/CabaProp: Fetcher (HTTP con TLS fingerprint, rápido)
   - Resultados se guardan como JSON en staging/ (no se escribe a departamentos)
 """
@@ -11,10 +10,10 @@ import re
 import logging
 from datetime import datetime, date
 
-from scrapling import StealthyFetcher, Fetcher
+from scrapling import Fetcher
 
 from app.services.url_builder_service import build_all_urls
-from app.services.parser_service import parse_zonaprop, parse_argenprop, parse_cabaprop
+from app.services.parser_service import parse_argenprop, parse_cabaprop
 from app.core.normalization import url_normalize
 from app.core.constants import TIPOS_DISPONIBLES
 
@@ -24,7 +23,6 @@ STAGING_DIR = pathlib.Path(__file__).parent.parent.parent / "staging"
 STAGING_DIR.mkdir(exist_ok=True)
 
 PARSERS = {
-    "zonaprop": parse_zonaprop,
     "argenprop": parse_argenprop,
     "cabaprop": parse_cabaprop,
 }
@@ -61,20 +59,10 @@ def delete_staging(run_id: int) -> None:
 
 def fetch_page_html(url: str, portal: str) -> str | None:
     """
-    Obtiene el HTML de una URL.
-    - ZonaProp: StealthyFetcher (browser stealth con bypass de Cloudflare/CAPTCHAs)
-    - Resto: Fetcher (HTTP con TLS fingerprint impersonation, sin browser)
+    Obtiene el HTML de una URL usando Fetcher (HTTP con TLS fingerprint impersonation).
     """
     try:
-        if portal == "zonaprop":
-            page = StealthyFetcher.fetch(
-                url,
-                headless=True,
-                solve_cloudflare=True,
-                network_idle=True,
-            )
-        else:
-            page = Fetcher.get(url, stealthy_headers=True)
+        page = Fetcher.get(url, stealthy_headers=True)
         return page.body
     except Exception as e:
         logger.warning(f"Error fetching {url}: {e}")
@@ -89,9 +77,7 @@ def _build_paginated_url(base_url: str, portal: str, page: int) -> str:
     """Construye la URL para la página N de resultados."""
     if page == 1:
         return base_url
-    if portal == "zonaprop":
-        return base_url.replace(".html", f"-pagina-{page}.html")
-    elif portal == "argenprop":
+    if portal == "argenprop":
         if "?" in base_url:
             path, qs = base_url.split("?", 1)
             return f"{path}/pagina-{page}?{qs}"

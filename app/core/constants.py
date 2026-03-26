@@ -22,7 +22,7 @@ BARRIOS_DISPONIBLES: list[str] = sorted([
     "villa-soldati", "villa-urquiza",
 ])
 
-PRIORIDAD_PORTALES: list[str] = ["zonaprop", "argenprop", "cabaprop"]
+PRIORIDAD_PORTALES: list[str] = ["argenprop", "cabaprop"]
 
 COLOR_SUBTE_MAP: dict[str, str] = {
     "A": "#00AEEF",

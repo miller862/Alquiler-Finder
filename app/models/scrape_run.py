@@ -27,7 +27,7 @@ class ScrapeRun(Base):
 
     portales: Mapped[list[str]] = mapped_column(
         ARRAY(String),
-        default=lambda: ["zonaprop", "argenprop", "cabaprop"],
+        default=lambda: ["argenprop", "cabaprop"],
     )
 
     total_scraped: Mapped[int] = mapped_column(Integer, default=0)
