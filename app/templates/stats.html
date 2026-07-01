@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Estadísticas — Deptos Scraper{% endblock %}
+
+{% block extra_style %}
+.stat-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; padding: 1.25rem; text-align: center; }
+.stat-value { font-size: 2rem; font-weight: 800; color: #7c8cf8; }
+.stat-label { font-size: .8rem; color: #6c7293; text-transform: uppercase; letter-spacing: .5px; }
+.table-dark-custom { --bs-table-bg: #1a1d27; --bs-table-striped-bg: #1e2235; --bs-table-border-color: #2d3148; color: #e0e0e0; font-size: .84rem; }
+.table-dark-custom th { background: #1e2235; color: #7c8cf8; font-size: .75rem; text-transform: uppercase; }
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+  <div class="d-flex align-items-center gap-3 mb-4">
+    <select id="statsPerfil" class="form-select form-select-sm" style="width:200px;">
+      <option value="">Todos mis perfiles</option>
+      {% for p in perfiles %}
+      <option value="{{ p.id }}">{{ p.nombre }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-primary btn-sm" id="btnCargarStats">Calcular</button>
+  </div>
+
+  <!-- KPIs -->
+  <div class="row g-3 mb-4" id="kpiRow">
+    <div class="col-6 col-md-3"><div class="stat-card"><div class="stat-value" id="kpiTotal">—</div><div class="stat-label">Total propiedades</div></div></div>
+    <div class="col-6 col-md-3"><div class="stat-card"><div class="stat-value" id="kpiActivas">—</div><div class="stat-label">Activas hoy</div></div></div>
+    <div class="col-6 col-md-3"><div class="stat-card"><div class="stat-value" id="kpiConScore">—</div><div class="stat-label">Con score</div></div></div>
+    <div class="col-6 col-md-3"><div class="stat-card"><div class="stat-value" id="kpiBarrios">—</div><div class="stat-label">Barrios</div></div></div>
+  </div>
+
+  <div class="row g-4">
+    <!-- Resumen numérico -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header"><strong>Resumen de métricas</strong></div>
+        <div class="card-body p-0">
+          <table class="table table-dark-custom mb-0">
+            <thead><tr><th>Métrica</th><th>Media</th><th>Mediana</th><th>Min</th><th>Max</th></tr></thead>
+            <tbody id="statsTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top 10 por score -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header"><strong>Top 10 por Score</strong></div>
+        <div class="card-body p-0">
+          <table class="table table-dark-custom mb-0">
+            <thead><tr><th>Score</th><th>Barrio</th><th>Dirección</th><th>Precio</th></tr></thead>
+            <tbody id="top10Body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Por barrio -->
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header"><strong>Agregado por barrio</strong></div>
+        <div class="card-body p-0">
+          <table class="table table-dark-custom mb-0">
+            <thead><tr><th>Barrio</th><th>Cant.</th><th>Precio prom</th><th>Score prom</th><th>Dist. subte prom</th></tr></thead>
+            <tbody id="barrioBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function fmt(v, dec=0) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return Number(v).toLocaleString('es-AR', {minimumFractionDigits: dec, maximumFractionDigits: dec});
+}
+
+function avg(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null; }
+function median(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a,b)=>a-b);
+  const m = Math.floor(s.length/2);
+  return s.length % 2 ? s[m] : (s[m-1]+s[m])/2;
+}
+
+async function cargarStats() {
+  const perfilId = document.getElementById('statsPerfil').value;
+  let url = '/api/departamentos?activo=true';
+  if (perfilId) url += `&perfil_id=${perfilId}`;
+
+  const resp = await fetch(url, {credentials: 'include'});
+  const gj = await resp.json();
+  const all = (gj.features || []).map(f => f.properties);
+
+  document.getElementById('kpiTotal').textContent = all.length;
+  document.getElementById('kpiActivas').textContent = all.filter(p=>p.activo).length;
+  document.getElementById('kpiConScore').textContent = all.filter(p=>p.score!==null).length;
+  const barrios = new Set(all.map(p=>p.barrio).filter(Boolean));
+  document.getElementById('kpiBarrios').textContent = barrios.size;
+
+  // Métricas resumen
+  const metrics = [
+    {label: 'Precio ($)', key: 'precio'},
+    {label: 'Expensas ($)', key: 'expensas'},
+    {label: 'Costo total ($)', key: 'costo_total'},
+    {label: 'Score', key: 'score'},
+    {label: 'Dist. subte (m)', key: 'distancia_m_subte'},
+    {label: 'Dist. verde (m)', key: 'dist_verde_final'},
+    {label: 'Dist. gym (m)', key: 'distancia_m_gym'},
+    {label: 'M² cubiertos', key: 'metros_cubiertos'},
+  ];
+
+  document.getElementById('statsTable').innerHTML = metrics.map(m => {
+    const vals = all.map(p=>p[m.key]).filter(v=>v!==null&&v!==undefined&&!isNaN(v));
+    if (!vals.length) return `<tr><td>${m.label}</td><td colspan="4" style="color:#555">Sin datos</td></tr>`;
+    return `<tr>
+      <td>${m.label}</td>
+      <td>${fmt(avg(vals), 0)}</td>
+      <td>${fmt(median(vals), 0)}</td>
+      <td>${fmt(Math.min(...vals), 0)}</td>
+      <td>${fmt(Math.max(...vals), 0)}</td>
+    </tr>`;
+  }).join('');
+
+  // Top 10
+  const top10 = [...all].filter(p=>p.score!==null).sort((a,b)=>b.score-a.score).slice(0,10);
+  document.getElementById('top10Body').innerHTML = top10.map(p =>
+    `<tr>
+      <td><strong style="color:#7c8cf8;">${p.score.toFixed(1)}</strong></td>
+      <td>${p.barrio||'—'}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${p.direccion||''}">${p.direccion||'—'}</td>
+      <td>$${fmt(p.precio)}</td>
+    </tr>`
+  ).join('');
+
+  // Por barrio
+  const byBarrio = {};
+  all.forEach(p => {
+    if (!p.barrio) return;
+    if (!byBarrio[p.barrio]) byBarrio[p.barrio] = [];
+    byBarrio[p.barrio].push(p);
+  });
+  const barrioRows = Object.entries(byBarrio)
+    .map(([b, ps]) => ({
+      barrio: b,
+      cant: ps.length,
+      precio: avg(ps.map(p=>p.precio).filter(v=>v)),
+      score: avg(ps.map(p=>p.score).filter(v=>v!==null)),
+      subte: avg(ps.map(p=>p.distancia_m_subte).filter(v=>v)),
+    }))
+    .sort((a,b) => (b.score||0)-(a.score||0));
+
+  document.getElementById('barrioBody').innerHTML = barrioRows.map(r =>
+    `<tr>
+      <td><strong>${r.barrio}</strong></td>
+      <td>${r.cant}</td>
+      <td>$${fmt(r.precio)}</td>
+      <td>${r.score !== null ? r.score.toFixed(1) : '—'}</td>
+      <td>${r.subte ? fmt(r.subte) + 'm' : '—'}</td>
+    </tr>`
+  ).join('');
+}
+
+document.getElementById('btnCargarStats').addEventListener('click', cargarStats);
+cargarStats();
+</script>
+{% endblock %}

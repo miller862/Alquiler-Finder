@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block title %}Scraping — Deptos Scraper{% endblock %}
+
+{% block extra_style %}
+.run-status-pending { color: #6c7293; }
+.run-status-scraping { color: #fdae61; }
+.run-status-scraped { color: #74b9ff; }
+.run-status-geocoding { color: #fdae61; }
+.run-status-geocoded { color: #a29bfe; }
+.run-status-computing_metrics { color: #fdae61; }
+.run-status-completed { color: #1a9641; }
+.run-status-failed { color: #d73027; }
+.table-dark-custom { --bs-table-bg: #1a1d27; --bs-table-striped-bg: #1e2235; --bs-table-border-color: #2d3148; color: #e0e0e0; font-size: .84rem; }
+.table-dark-custom th { background: #1e2235; color: #7c8cf8; font-size: .75rem; text-transform: uppercase; }
+.spinner-border-sm { width: 1rem; height: 1rem; border-width: .15em; }
+.op-status { font-size: .82rem; padding: .5rem .75rem; border-radius: 6px; margin-top: .5rem; }
+.op-status.running { background: rgba(253,174,97,.12); border: 1px solid rgba(253,174,97,.3); color: #fdae61; }
+.op-status.done { background: rgba(26,150,65,.12); border: 1px solid rgba(26,150,65,.3); color: #1a9641; }
+.op-status.error { background: rgba(215,48,39,.12); border: 1px solid rgba(215,48,39,.3); color: #d73027; }
+.op-status.captcha { background: rgba(255,165,0,.15); border: 1px solid rgba(255,165,0,.4); color: #ffa500; }
+.btn-action-sm { font-size: .72rem; padding: .18rem .5rem; }
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-4">
+  <h4 class="mb-4"><i class="bi bi-robot"></i> Panel de Scraping</h4>
+
+  <div class="row g-4">
+    <!-- Formulario de disparo -->
+    <div class="col-lg-5">
+      <div class="card">
+        <div class="card-header"><strong>Iniciar nuevo scraping</strong></div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label">Perfil</label>
+            <select id="scrapePerfil" class="form-select">
+              {% for p in perfiles %}
+              <option value="{{ p.id }}">{{ p.nombre }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Portales</label>
+            <div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input portal-check" type="checkbox" value="argenprop" id="pArgen" checked>
+                <label class="form-check-label" for="pArgen">Argenprop</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input portal-check" type="checkbox" value="zonaprop" id="pZona">
+                <label class="form-check-label" for="pZona">ZonaProp</label>
+              </div>
+            </div>
+          </div>
+          <div class="mb-3" id="zonapropCookieBox" style="display:none;">
+            <label class="form-label">Cookie ZonaProp (<code>cf_clearance</code>)</label>
+            <textarea id="zonapropCookie" class="form-control" rows="3" placeholder="Pega aca el valor de cf_clearance (ver docs/zonaprop_cookie.md)"></textarea>
+            <small class="text-secondary">Solo para ZonaProp. Se vence: si falla, actualizala.</small>
+          </div>
+          <button class="btn btn-primary" id="btnIniciarScraping">
+            <i class="bi bi-play-fill"></i> Iniciar Scraping
+          </button>
+          <div id="scrapeStatus"></div>
+          <div class="mt-3" id="scrapeLogPanel" style="display:none;">
+            <label class="form-label text-secondary" style="font-size:.75rem;">Log en vivo</label>
+            <pre id="scrapeLog" class="p-3 rounded mb-0" style="background:#0f1117;border:1px solid #2d3148;color:#b0b7d4;font-size:.75rem;max-height:350px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Historial de runs -->
+    <div class="col-lg-7">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between">
+          <strong>Historial de runs</strong>
+          <button class="btn btn-outline-secondary btn-sm" id="btnRefreshRuns">
+            <i class="bi bi-arrow-clockwise"></i> Actualizar
+          </button>
+        </div>
+        <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
+          <table class="table table-dark-custom mb-0">
+            <thead>
+              <tr>
+                <th>#</th><th>Perfil</th><th>Estado</th><th>Portales</th>
+                <th>Scraped</th><th>Inicio</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="runsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- State ---
+let polling = null;
+let activeRunId = null;
+const ACTIVE_STATUSES = ['pending', 'scraping', 'geocoding', 'computing_metrics'];
+
+// --- Helpers ---
+function setButtonLoading(btn, loading, originalHTML) {
+  btn.disabled = loading;
+  if (loading) {
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> ' + btn.textContent.trim() + '...';
+  } else {
+    btn.innerHTML = originalHTML;
+  }
+}
+
+function showStatus(containerId, type, message) {
+  document.getElementById(containerId).innerHTML = '<div class="op-status ' + type + '">' + message + '</div>';
+}
+
+function isActive(status) {
+  return ACTIVE_STATUSES.includes(status);
+}
+
+function statusLabel(s) {
+  const map = {
+    pending: 'Pendiente', scraping: 'Scrapeando', scraped: 'Scrapeado',
+    geocoding: 'Geocodificando', geocoded: 'Geocodificado',
+    computing_metrics: 'Metricas', completed: 'Completado', failed: 'Fallido'
+  };
+  return map[s] || s;
+}
+
+// --- Scraping ---
+async function iniciarScraping() {
+  const perfilId = parseInt(document.getElementById('scrapePerfil').value);
+  const portales = [...document.querySelectorAll('.portal-check:checked')].map(c => c.value);
+  if (!portales.length) { alert('Selecciona al menos un portal'); return; }
+
+  const zonapropCookie = document.getElementById('zonapropCookie').value.trim();
+  if (portales.includes('zonaprop') && !zonapropCookie) {
+    alert('ZonaProp requiere la cookie cf_clearance. Pegala o desmarca ZonaProp.');
+    return;
+  }
+
+  const btn = document.getElementById('btnIniciarScraping');
+  const originalHTML = btn.innerHTML;
+  setButtonLoading(btn, true, originalHTML);
+
+  try {
+    const resp = await fetch('/api/scraping/run', {
+      method: 'POST', credentials: 'include',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({perfil_id: perfilId, portales, zonaprop_cookie: zonapropCookie || null}),
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      activeRunId = data.id;
+      showStatus('scrapeStatus', 'running',
+        '<span class="spinner-border spinner-border-sm me-1"></span> Run #' + data.id + ' en curso...');
+      startPolling();
+    } else if (resp.status === 409) {
+      showStatus('scrapeStatus', 'running',
+        '<span class="spinner-border spinner-border-sm me-1"></span> Ya hay un proceso en curso.');
+      startPolling();
+    } else {
+      const err = await resp.json();
+      showStatus('scrapeStatus', 'error', 'Error: ' + err.detail);
+      setButtonLoading(btn, false, originalHTML);
+    }
+  } catch (e) {
+    showStatus('scrapeStatus', 'error', 'Error de conexion: ' + e.message);
+    setButtonLoading(btn, false, originalHTML);
+  }
+}
+
+// --- Per-run actions ---
+async function triggerRunGeocode(runId) {
+  activeRunId = runId;
+  showStatus('scrapeStatus', 'running',
+    '<span class="spinner-border spinner-border-sm me-1"></span> Geocodificando run #' + runId + '...');
+  startPolling();
+
+  try {
+    const resp = await fetch('/api/scraping/runs/' + runId + '/geocode', {method: 'POST', credentials: 'include'});
+    if (!resp.ok) {
+      const err = await resp.json();
+      showStatus('scrapeStatus', 'error', 'Error: ' + err.detail);
+      stopPolling();
+    }
+  } catch (e) {
+    showStatus('scrapeStatus', 'error', 'Error de conexion: ' + e.message);
+    stopPolling();
+  }
+}
+
+async function triggerRunMetrics(runId) {
+  activeRunId = runId;
+  showStatus('scrapeStatus', 'running',
+    '<span class="spinner-border spinner-border-sm me-1"></span> Calculando metricas run #' + runId + '...');
+  startPolling();
+
+  try {
+    const resp = await fetch('/api/scraping/runs/' + runId + '/metrics', {method: 'POST', credentials: 'include'});
+    if (!resp.ok) {
+      const err = await resp.json();
+      showStatus('scrapeStatus', 'error', 'Error: ' + err.detail);
+      stopPolling();
+    }
+  } catch (e) {
+    showStatus('scrapeStatus', 'error', 'Error de conexion: ' + e.message);
+    stopPolling();
+  }
+}
+
+// --- Polling ---
+function startPolling() {
+  if (polling) clearInterval(polling);
+  document.getElementById('scrapeLogPanel').style.display = 'block';
+  const pollInterval = 2000;
+
+  function poll() {
+    fetch('/api/scraping/runs', {credentials: 'include'})
+      .then(r => r.json())
+      .then(runs => {
+        renderRuns(runs);
+
+        // Find the run to show logs for
+        const runningRun = runs.find(r => isActive(r.status));
+        const runToShow = runningRun || (activeRunId ? runs.find(r => r.id === activeRunId) : runs[0]);
+
+        const logEl = document.getElementById('scrapeLog');
+        if (runToShow) {
+          const logText = runToShow.progress_log && runToShow.progress_log.trim()
+            ? runToShow.progress_log
+            : (isActive(runToShow.status) ? 'Esperando logs...' : 'Sin logs para este run.');
+          logEl.textContent = logText;
+          logEl.scrollTop = logEl.scrollHeight;
+
+          // CAPTCHA highlight
+          if (logText.includes('[CAPTCHA]')) {
+            showStatus('scrapeStatus', 'captcha',
+              '⚠️ CAPTCHA detectado. Resolvelo en la ventana del navegador.');
+          }
+        }
+
+        const anyActive = runs.some(r => isActive(r.status));
+        if (!anyActive) {
+          stopPolling();
+          const btn = document.getElementById('btnIniciarScraping');
+          btn.disabled = false;
+          btn.innerHTML = '<i class="bi bi-play-fill"></i> Iniciar Scraping';
+
+          const latest = activeRunId ? runs.find(r => r.id === activeRunId) : runs[0];
+          if (latest) {
+            if (latest.status === 'completed') {
+              showStatus('scrapeStatus', 'done',
+                'Pipeline completado. Datos disponibles en mapa, ranking y estadisticas.');
+            } else if (latest.status === 'scraped') {
+              showStatus('scrapeStatus', 'done',
+                'Scraping completado (' + latest.total_scraped + ' items). Usa "Geocodificar" para continuar.');
+            } else if (latest.status === 'geocoded') {
+              showStatus('scrapeStatus', 'done',
+                'Geocodificacion completada. Usa "Metricas" para finalizar.');
+            } else if (latest.status === 'failed') {
+              showStatus('scrapeStatus', 'error',
+                'Fallido: ' + (latest.error_message || 'Error desconocido'));
+            }
+          }
+        }
+      });
+  }
+  poll();
+  polling = setInterval(poll, pollInterval);
+}
+
+function stopPolling() {
+  if (polling) { clearInterval(polling); polling = null; }
+}
+
+// --- Runs table ---
+function renderRuns(runs) {
+  const anyActive = runs.some(r => isActive(r.status));
+  const body = document.getElementById('runsBody');
+  body.innerHTML = runs.map(r => {
+    const started = r.started_at ? new Date(r.started_at).toLocaleString('es-AR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+    const statusIcon = isActive(r.status)
+      ? '<span class="spinner-border spinner-border-sm me-1"></span>' : '';
+
+    // Action buttons based on status
+    let actions = '';
+    if (isActive(r.status)) {
+      actions = '<button type="button" class="btn btn-outline-secondary btn-action-sm run-interrupt" data-run-id="' + r.id + '">Interrumpir</button>';
+    } else if (r.status === 'scraped' && !anyActive) {
+      actions = '<button type="button" class="btn btn-outline-info btn-action-sm run-geocode" data-run-id="' + r.id + '"><i class="bi bi-geo-alt"></i> Geocodificar</button>';
+    } else if (r.status === 'geocoded' && !anyActive) {
+      actions = '<button type="button" class="btn btn-outline-warning btn-action-sm run-metrics" data-run-id="' + r.id + '"><i class="bi bi-calculator"></i> Metricas</button>';
+    } else if (r.status === 'completed') {
+      actions = '<span class="text-success" style="font-size:.8rem;"><i class="bi bi-check-circle-fill"></i></span>';
+    } else if (r.status === 'failed') {
+      actions = '<span class="text-danger" style="font-size:.8rem;" title="' + (r.error_message || '') + '"><i class="bi bi-x-circle-fill"></i></span>';
+    }
+
+    return '<tr>' +
+      '<td>' + r.id + '</td>' +
+      '<td>' + (r.perfil_id || '—') + '</td>' +
+      '<td class="run-status-' + r.status + '">' + statusIcon + '<strong>' + statusLabel(r.status) + '</strong></td>' +
+      '<td style="font-size:.75rem;">' + (r.portales || []).join(', ') + '</td>' +
+      '<td>' + (r.total_scraped ?? '') + '</td>' +
+      '<td style="font-size:.75rem;">' + started + '</td>' +
+      '<td>' + actions + '</td>' +
+    '</tr>';
+  }).join('');
+
+  // Bind action buttons
+  body.querySelectorAll('.run-interrupt').forEach(btn => {
+    btn.addEventListener('click', () => interruptRun(parseInt(btn.dataset.runId)));
+  });
+  body.querySelectorAll('.run-geocode').forEach(btn => {
+    btn.addEventListener('click', () => triggerRunGeocode(parseInt(btn.dataset.runId)));
+  });
+  body.querySelectorAll('.run-metrics').forEach(btn => {
+    btn.addEventListener('click', () => triggerRunMetrics(parseInt(btn.dataset.runId)));
+  });
+}
+
+async function interruptRun(runId) {
+  try {
+    const resp = await fetch('/api/scraping/runs/' + runId + '/interrupt', { method: 'PATCH', credentials: 'include' });
+    if (resp.ok) {
+      stopPolling();
+      const runs = await fetch('/api/scraping/runs', { credentials: 'include' }).then(r => r.json());
+      renderRuns(runs);
+      document.getElementById('scrapeLog').textContent = 'Run #' + runId + ' interrumpido.';
+      const btn = document.getElementById('btnIniciarScraping');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-play-fill"></i> Iniciar Scraping';
+      showStatus('scrapeStatus', 'done', 'Run #' + runId + ' interrumpido.');
+    } else {
+      const runs = await fetch('/api/scraping/runs', { credentials: 'include' }).then(r => r.json());
+      renderRuns(runs);
+    }
+  } catch (e) {
+    showStatus('scrapeStatus', 'error', 'Error: ' + e.message);
+  }
+}
+
+async function cargarRuns() {
+  const resp = await fetch('/api/scraping/runs', {credentials: 'include'});
+  const runs = await resp.json();
+  renderRuns(runs);
+}
+
+// --- Check for active jobs on page load ---
+async function checkRunningOnLoad() {
+  const resp = await fetch('/api/scraping/runs', {credentials: 'include'});
+  const runs = await resp.json();
+  renderRuns(runs);
+
+  const activeRun = runs.find(r => isActive(r.status));
+  if (activeRun) {
+    activeRunId = activeRun.id;
+    document.getElementById('scrapeLogPanel').style.display = 'block';
+    if (activeRun.progress_log) {
+      const el = document.getElementById('scrapeLog');
+      el.textContent = activeRun.progress_log;
+      el.scrollTop = el.scrollHeight;
+    }
+    const btn = document.getElementById('btnIniciarScraping');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Proceso en curso...';
+    showStatus('scrapeStatus', 'running',
+      '<span class="spinner-border spinner-border-sm me-1"></span> Proceso en curso...');
+    startPolling();
+  }
+}
+
+// --- Event listeners ---
+document.getElementById('btnIniciarScraping').addEventListener('click', iniciarScraping);
+document.getElementById('btnRefreshRuns').addEventListener('click', cargarRuns);
+document.getElementById('pZona').addEventListener('change', (e) => {
+  document.getElementById('zonapropCookieBox').style.display = e.target.checked ? 'block' : 'none';
+});
+
+checkRunningOnLoad();
+</script>
+{% endblock %}

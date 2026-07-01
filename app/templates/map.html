@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Mapa — Deptos Scraper{% endblock %}
+
+{% block extra_style %}
+#map { height: calc(100vh - 56px); width: 100%; }
+.sidebar {
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2d3148 #1a1d27;
+}
+.sidebar-section { border-bottom: 1px solid #2d3148; padding-bottom: 1rem; margin-bottom: 1rem; }
+.sidebar-title { font-size: .75rem; text-transform: uppercase; letter-spacing: 1px; color: #7c8cf8; font-weight: 600; margin-bottom: .5rem; }
+.filter-count { font-size: .75rem; color: #6c7293; margin-top: .25rem; }
+.legend-gradient { height: 12px; border-radius: 4px; }
+.prop-popup { font-size: .85rem; min-width: 220px; }
+.prop-popup h6 { font-size: .9rem; font-weight: 700; margin-bottom: .3rem; }
+.prop-popup .badge { font-size: .7rem; }
+{% endblock %}
+
+{% block content %}
+<div class="d-flex" style="height: calc(100vh - 56px);">
+
+  <!-- Sidebar de filtros -->
+  <div class="sidebar" style="width: 280px; flex-shrink: 0;">
+    {% if user.is_admin %}
+    <div class="sidebar-section">
+      <div class="sidebar-title">Ver departamentos de</div>
+      <select id="selPerfil" class="form-select form-select-sm">
+        <option value="global">Todos los usuarios</option>
+        {% for p in all_perfiles %}
+        <option value="{{ p.id }}">{{ p.nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% else %}
+    {# Usuario normal: su perfil se carga automaticamente #}
+    <input type="hidden" id="selPerfil" value="{{ perfil.id if perfil else '' }}">
+    {% endif %}
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Estado</div>
+      <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="activo" id="r-activo" value="true" checked>
+        <label class="form-check-label" for="r-activo">Activos</label>
+      </div>
+      <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="activo" id="r-todos" value="">
+        <label class="form-check-label" for="r-todos">Todos</label>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Color del mapa</div>
+      <div class="form-check">
+        <input class="form-check-input" type="radio" name="colorMode" id="cm-score" value="score" checked>
+        <label class="form-check-label" for="cm-score">Score</label>
+      </div>
+      <div class="form-check">
+        <input class="form-check-input" type="radio" name="colorMode" id="cm-precio" value="precio">
+        <label class="form-check-label" for="cm-precio">Precio</label>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Precio ($)</div>
+      <div class="d-flex gap-2">
+        <input type="number" id="precioMin" class="form-control form-control-sm" placeholder="Mínimo" step="10000">
+        <input type="number" id="precioMax" class="form-control form-control-sm" placeholder="Máximo" step="10000">
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Score mínimo</div>
+      <input type="number" id="scoreMin" class="form-control form-control-sm" placeholder="Ej: 50" min="0" max="100">
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Dormitorios</div>
+      <div class="d-flex flex-wrap gap-1" id="dormFiltros">
+        <button class="btn btn-sm btn-outline-secondary dorm-btn" data-val="1">1</button>
+        <button class="btn btn-sm btn-outline-secondary dorm-btn" data-val="2">2</button>
+        <button class="btn btn-sm btn-outline-secondary dorm-btn" data-val="3">3</button>
+        <button class="btn btn-sm btn-outline-secondary dorm-btn" data-val="4">4+</button>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="sidebar-title mb-0">Capas del mapa</div>
+      </div>
+      <div class="form-check"><input class="form-check-input layer-toggle" type="checkbox" id="layBarrios" data-layer="barrios" checked><label class="form-check-label" for="layBarrios">Barrios</label></div>
+      <div class="form-check"><input class="form-check-input layer-toggle" type="checkbox" id="layEV" data-layer="ev" checked><label class="form-check-label" for="layEV">Espacios verdes</label></div>
+      <div class="form-check"><input class="form-check-input layer-toggle" type="checkbox" id="laySubte" data-layer="subte" checked><label class="form-check-label" for="laySubte">Subte</label></div>
+      <div class="form-check"><input class="form-check-input layer-toggle" type="checkbox" id="layGyms" data-layer="gyms" checked><label class="form-check-label" for="layGyms">Gimnasios</label></div>
+    </div>
+
+    <div class="sidebar-section">
+      <button id="btnAplicar" class="btn btn-primary btn-sm w-100">Actualizar mapa</button>
+      <div class="filter-count mt-2" id="contadorProps">Cargando...</div>
+    </div>
+
+    <!-- Leyenda -->
+    <div class="sidebar-section">
+      <div class="sidebar-title">Leyenda</div>
+      <div id="legendaScore">
+        <div class="legend-gradient" style="background: linear-gradient(to right, #d73027, #fdae61, #1a9641);"></div>
+        <div class="d-flex justify-content-between mt-1" style="font-size:.7rem; color:#6c7293;">
+          <span>Bajo</span><span>Score</span><span>Alto</span>
+        </div>
+      </div>
+      <div id="legendaPrecio" style="display:none;">
+        <div class="legend-gradient" style="background: linear-gradient(to right, #1a9641, #fdae61, #d73027);"></div>
+        <div class="d-flex justify-content-between mt-1" style="font-size:.7rem; color:#6c7293;">
+          <span>Bajo</span><span>Precio</span><span>Alto</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mapa Leaflet -->
+  <div id="map" style="flex: 1;"></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/map.js"></script>
+{% endblock %}

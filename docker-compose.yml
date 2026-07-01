@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: deptos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deptos_dev}
+      POSTGRES_DB: deptos_scraper
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Puerto del HOST configurable (default 5432). Si ya tenés un Postgres
+      # nativo ocupando 5432, definí DB_HOST_PORT=5433 en tu .env.
+      - "${DB_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deptos -d deptos_scraper"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    # NOTA: con DEBUG=false uvicorn NO hace hot-reload.
+    # Tras cambios en código Python (routers, services, models) hay que reiniciar el contenedor:
+    #   docker-compose restart app   (rápido, sin rebuild)
+    #   docker-compose up --build -d (si también cambiaste Dockerfile o requirements.txt)
+    # Los cambios en app/templates y app/static se reflejan con F5 gracias al volumen montado.
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://deptos:${POSTGRES_PASSWORD:-deptos_dev}@db:5432/deptos_scraper
+      SYNC_DATABASE_URL: postgresql+psycopg2://deptos:${POSTGRES_PASSWORD:-deptos_dev}@db:5432/deptos_scraper
+      SECRET_KEY: ${SECRET_KEY:-changeme-set-a-real-secret-in-env}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-manuel}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      DEBUG: "false"
+      DOCKER_ENV: "true"
+      SHAPES_DIR: /app/shapes
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app:ro
+      - ./migrations:/app/migrations:ro
+      - ./scripts:/app/scripts:ro
+      - ./shapes:/app/shapes:ro
+      - ./perfiles:/app/perfiles:ro
+      - ./seed:/app/seed
+
+volumes:
+  postgres_data:
