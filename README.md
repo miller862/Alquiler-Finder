@@ -42,7 +42,8 @@ POSTGRES_PASSWORD=tu_password_seguro
 SECRET_KEY=clave-secreta-generada
 
 # Credenciales del usuario admin
-ADMIN_USERNAME=tu_usuario
+# ADMIN_USERNAME es opcional; si no se define, el usuario se llama "manuel"
+# ADMIN_USERNAME=el_nombre_que_quieras
 ADMIN_PASSWORD=tu_password
 
 # API Key de Google Maps (para geocodificacion de direcciones)
